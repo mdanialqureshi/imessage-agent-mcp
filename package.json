@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/cli.ts serve",
     "doctor": "node src/cli.ts doctor",
-    "test": "node --test test/",
+    "test": "node --test \"test/*.test.ts\"",
     "safety": "node scripts/check-public-safety.mjs",
     "safety:all": "node scripts/check-public-safety.mjs --all --check-authors",
     "eval": "node test/eval/run-eval.ts"
