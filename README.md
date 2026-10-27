@@ -1,14 +1,14 @@
 # imessage-agent-mcp
 
-**Let your AI assistant see the plans and promises in your texts, without your messages leaving your Mac.**
+**Let your AI assistant see the plans and promises in your texts, with everything running on your Mac.**
 
 You reply "let's chill" to "what are you doing on tuesday?" and never put it in your calendar. Your assistant (ChatGPT's Dot, Claude, or any [MCP](https://modelcontextprotocol.io) app) can't help, because it can't see iMessage.
 
-This reads Messages read-only, understands the conversations, and keeps a list of plans, calls, tasks, follow-ups, reminders, replies you owe, invites, IOUs, what others owe you, check-ins, facts to remember and recommendations. Your agent checks the list on your schedule and tells you in its own chat.
+This reads Messages read-only, understands the conversations, and keeps a list of plans, calls, tasks, follow-ups, things to consider, reminders, replies you owe, invites, IOUs, what others owe you, check-ins, facts to remember and recommendations. Your agent checks the list on your schedule, tells you in its own chat, and, if you ask it to, checks with you before adding anything to your calendar.
 
-> **🔒 Everything runs on your Mac.** There's no server, tunnel or open network port, not even on localhost, and nothing to sign up for. Your messages are read and stored only on your Mac. The only things that leave it:
-> - new conversations, sent through your own Claude or ChatGPT subscription so they can be interpreted (minus codes, short codes and contacts you mark private)
-> - answers to the agent you ask
+> **🔒 Runs entirely on your Mac.** There's no server, tunnel or open network port (not even on localhost), and no account with this project. Your message database, the item list and the logs stay on your Mac. Two things leave it, both through accounts you already use, and both minus codes, short codes and contacts you mark private:
+> - **New conversations**, sent through your own Claude or ChatGPT subscription to be interpreted.
+> - **Tool results** (the brief, items, and the messages you search or ask about), sent to the agent that asked, under that agent's own privacy terms.
 >
 > Cloud agents like Dot reach your Mac only through the ChatGPT or Claude desktop app running on it. Details: [docs/security.md](docs/security.md).
 
@@ -27,7 +27,7 @@ This reads Messages read-only, understands the conversations, and keeps a list o
 
 - **The reader** is a small C program. It copies Messages and Contacts into a private folder and does nothing else.
 - **The background service** reads that copy. Every 2 hours it interprets new messages with your Claude or ChatGPT subscription (no API keys), and it keeps the list.
-- **The bridge** is what your apps launch. It relays requests to the service over a socket only you can open.
+- **The bridge** is what your apps launch. It relays requests to the service over a socket only your user account can open.
 
 \*Verified: Claude Code, Codex and the Claude desktop app on the Mac, and Dot through the `call` command. Not yet verified: Dot seeing the tools natively, and Claude from your phone ([roadmap](docs/roadmap.md)).
 
@@ -52,7 +52,7 @@ node src/cli.ts setup --interpreter claude    # or: --interpreter codex
 
 ### Full Disk Access
 
-**Why it's needed:** macOS keeps your Messages history in a protected folder that no program can read without Full Disk Access, and there's no other way to read iMessage on a Mac. So exactly one tiny program, the reader, gets it. The reader only copies Messages and Contacts into this project's private folder. Nothing else gets Full Disk Access: not `node`, not your terminal, not your apps.
+**Why it's needed:** macOS keeps your Messages history in a protected folder that no program can read without Full Disk Access, and there's no other way for a program to read it. So exactly one tiny program, the reader, gets it. It only copies Messages and Contacts into a private folder in `~/Library/Application Support/imessage-agent-mcp`. Nothing else needs it in normal use, and never give it to `node`. (The debugging commands `interpret` and `export` read Messages directly, so they only work from a terminal you've given Full Disk Access yourself.)
 
 macOS makes you switch it on yourself:
 
