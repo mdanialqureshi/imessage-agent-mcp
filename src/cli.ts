@@ -11,7 +11,7 @@ import { interpretNow } from './interpret/run.ts';
 import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
 import { Conversations } from './messages/conversations.ts';
-import { compileReader, READER_BUILD, READER_LABEL, readerBinary, readerStatus, STALE_MS } from './messages/mirror.ts';
+import { compileReader, READER_BUILD, READER_INFO, READER_LABEL, readerApp, readerBinary, readerStatus, STALE_MS } from './messages/mirror.ts';
 import { APPS, which } from './apps.ts';
 import { bridge, callTool, type ServiceHealth, serviceHealth } from './bridge.ts';
 import { serveSocket, socketPath } from './server.ts';
@@ -48,8 +48,9 @@ function bridgeCommand(): string[] {
 function fdaHelp(): string {
   return `Give imessage-agent's reader Full Disk Access (macOS requires you to do this yourself):
   1. System Settings → Privacy & Security → Full Disk Access
-  2. Click +, press ⌘⇧G, paste the path below, press Return, then Open:
-     ${readerBinary()}
+  2. Drag in imessage-agent-reader from the Applications folder in your home folder,
+     or click +, press ⌘⇧H, open Applications and choose imessage-agent-reader.
+     (It's ${readerApp()})
   3. Make sure its switch is on.
   The reader only copies Messages and Contacts into imessage-agent's private folder; it takes no
   input and can't be pointed at anything else. Node, your terminal and your apps don't need access.
@@ -63,18 +64,21 @@ const readerSource = path.join(path.dirname(cliPath), '..', 'helper', 'reader.c'
  * build has a new signature, so macOS asks for Full Disk Access again. Returns true if built.
  */
 function buildReader(): boolean {
-  const bin = readerBinary();
-  const stamp = `${bin}.sha256`;
-  const hash = createHash('sha256').update(fs.readFileSync(readerSource)).update(JSON.stringify(READER_BUILD)).digest('hex');
-  if (fs.existsSync(bin) && fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8').trim() === hash) return false;
+  const app = readerApp();
+  const stamp = path.join(paths.stateDir, 'reader.sha256'); // Outside the app: changing the app breaks its signature.
+  const hash = createHash('sha256').update(fs.readFileSync(readerSource)).update(JSON.stringify(READER_BUILD)).update(READER_INFO).digest('hex');
+  fs.rmSync(path.join(paths.stateDir, 'bin'), { recursive: true, force: true }); // Where older versions kept it.
+  if (fs.existsSync(readerBinary()) && fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8').trim() === hash) return false;
   if (spawnSync('/usr/bin/xcode-select', ['-p'], { stdio: 'ignore' }).status !== 0) {
     throw new Error("its reader is built with Apple's Command Line Tools: run `xcode-select --install`, then setup again");
   }
   ensureStateDir();
-  fs.mkdirSync(path.dirname(bin), { recursive: true, mode: 0o700 });
-  const tmp = `${bin}.new`;
+  const tmp = path.join(paths.stateDir, 'reader-build.app'); // Same disk as ~/Applications, so the move is atomic.
+  fs.rmSync(tmp, { recursive: true, force: true });
   compileReader(readerSource, tmp);
-  fs.renameSync(tmp, bin);
+  fs.mkdirSync(path.dirname(app), { recursive: true });
+  fs.rmSync(app, { recursive: true, force: true });
+  fs.renameSync(tmp, app);
   fs.writeFileSync(stamp, hash + '\n');
   return true;
 }
@@ -159,7 +163,7 @@ async function setup(): Promise<void> {
 
   console.log('\n2. Background service (runs on this Mac at login; Unix socket only, no network port)');
   try {
-    if (buildReader()) console.log(`   Built its reader, the only part that will hold Full Disk Access: ${readerBinary()}`);
+    if (buildReader()) console.log(`   Built its reader, the only part that will hold Full Disk Access: ${readerApp()}`);
   } catch (err: any) {
     console.log(`   ❌ ${err.message.split('\n')[0]}`);
     process.exitCode = 1;
@@ -197,8 +201,8 @@ async function setup(): Promise<void> {
     console.log(fdaHelp().replace(/^/gm, '   '));
     if (!flag('no-open')) {
       const pane = spawnSync('/usr/bin/open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles']).status === 0;
-      const shown = spawnSync('/usr/bin/open', ['-R', readerBinary()]).status === 0; // Finder hides ~/Library.
-      if (pane && shown) console.log('   Opened Full Disk Access in System Settings and showed the reader in Finder: drag it into the list.');
+      const shown = spawnSync('/usr/bin/open', ['-R', readerApp()]).status === 0;
+      if (pane && shown) console.log('   Opened Full Disk Access in System Settings and showed imessage-agent-reader in Finder: drag it into the list.');
     }
     if (process.stdout.isTTY && !flag('no-wait')) {
       console.log('\n   Waiting for access (Ctrl-C to finish later with: node src/cli.ts doctor)…');
@@ -400,7 +404,8 @@ function uninstallService(): void {
     fs.rmSync(file, { force: true });
   }
   fs.rmSync(socketPath(), { force: true });
-  for (const name of ['mirror', 'reader-status', 'bin']) fs.rmSync(path.join(paths.stateDir, name), { recursive: true, force: true });
+  for (const name of ['mirror', 'reader-status', 'reader.sha256', 'bin']) fs.rmSync(path.join(paths.stateDir, name), { recursive: true, force: true });
+  fs.rmSync(readerApp(), { recursive: true, force: true });
   console.log(`Removed the background service (${LABEL}), its reader and its copy of Messages.`);
 }
 

@@ -496,7 +496,7 @@ test('interpreter defaults to claude and is switchable by config or environment'
 test('the reader copies Messages and Contacts privately, and only into its own folder', { skip: process.platform !== 'darwin' && 'macOS only' }, async () => {
   const { execFileSync, spawnSync } = await import('node:child_process');
   const { DatabaseSync } = await import('node:sqlite');
-  const { compileReader } = await import('../src/messages/mirror.ts');
+  const { compileReader, readerBinary } = await import('../src/messages/mirror.ts');
   const home = path.join(dir, 'reader-home');
   fs.rmSync(home, { recursive: true, force: true });
   const support = path.join(home, 'Library/Application Support');
@@ -510,8 +510,9 @@ test('the reader copies Messages and Contacts privately, and only into its own f
   fs.copyFileSync(process.env.IMESSAGE_DB_PATH!, chat);
   const writer = new DatabaseSync(chat);
   writer.exec('PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE pending(x); INSERT INTO pending VALUES (1), (2);');
-  const bin = path.join(home, 'reader');
-  compileReader(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'helper', 'reader.c'), bin, ['-Werror', `-DREADER_HOME="${home}"`]);
+  const app = path.join(home, 'imessage-agent-reader.app');
+  compileReader(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'helper', 'reader.c'), app, ['-Werror', `-DREADER_HOME="${home}"`]);
+  const bin = readerBinary(app);
   const run = (env: NodeJS.ProcessEnv = {}) => spawnSync(bin, { encoding: 'utf8', env }).status;
   const status = () => fs.readFileSync(path.join(state, 'reader-status'), 'utf8');
   const mirror = path.join(state, 'mirror');
@@ -519,7 +520,10 @@ test('the reader copies Messages and Contacts privately, and only into its own f
   const victimDb = path.join(home, 'victim.db');
   try {
     // Signed with the hardened runtime, so an injected library never runs inside it.
-    assert.match(spawnSync('/usr/bin/codesign', ['-dv', bin], { encoding: 'utf8' }).stderr, /flags=0x\w+\([^)]*runtime/);
+    const signature = spawnSync('/usr/bin/codesign', ['-dv', app], { encoding: 'utf8' }).stderr;
+    assert.match(signature, /flags=0x\w+\([^)]*runtime/);
+    assert.match(signature, /Identifier=com\.imessage-agent-mcp\.reader\n/);
+    assert.equal(spawnSync('/usr/bin/codesign', ['--verify', '--strict', app]).status, 0, 'the app is validly signed');
     const marker = path.join(home, 'injected');
     const lib = path.join(home, 'inject.dylib');
     fs.writeFileSync(`${lib}.c`, `#include <stdio.h>\n__attribute__((constructor)) static void f(void) { FILE *f = fopen("${marker}", "w"); if (f) fclose(f); }\n`);

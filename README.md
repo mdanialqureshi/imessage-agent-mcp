@@ -25,7 +25,7 @@ This reads Messages read-only, understands the conversations, and keeps a list o
                                         └──► claude -p or codex exec (your subscription)
 ```
 
-- **The reader** is a small C program. It copies Messages and Contacts into a private folder and does nothing else.
+- **The reader** is a tiny app (`~/Applications/imessage-agent-reader.app`) built from one C file. It copies Messages and Contacts into a private folder and does nothing else.
 - **The background service** reads that copy. Every 2 hours it interprets new messages with your Claude or ChatGPT subscription (no API keys), and it keeps the list.
 - **The bridge** is what your apps launch. It relays requests to the service over a socket only your user account can open.
 
@@ -52,15 +52,12 @@ node src/cli.ts setup --interpreter claude    # or: --interpreter codex
 
 ### Full Disk Access
 
-**Why it's needed:** macOS keeps your Messages history in a protected folder that no program can read without Full Disk Access, and there's no other way for a program to read it. So exactly one tiny program, the reader, gets it. It only copies Messages and Contacts into a private folder in `~/Library/Application Support/imessage-agent-mcp`. Nothing else needs it in normal use, and never give it to `node`. (The debugging commands `interpret` and `export` read Messages directly, so they only work from a terminal you've given Full Disk Access yourself.)
+**Why it's needed:** macOS keeps your Messages history in a protected folder that no program can read without Full Disk Access, and there's no other way for a program to read it. So exactly one tiny program, the reader, gets it. It only copies Messages and Contacts into a private folder in `~/Library/Application Support/imessage-agent-mcp`. Opening it by hand does the same, nothing more. Nothing else needs it in normal use, and never give it to `node`. (The debugging commands `interpret` and `export` read Messages directly, so they only work from a terminal you've given Full Disk Access yourself.)
 
 macOS makes you switch it on yourself:
 
-1. `setup` opens **System Settings → Privacy & Security → Full Disk Access** and shows **imessage-agent-reader** in Finder. To show it again:
-   ```sh
-   open -R ~/Library/Application\ Support/imessage-agent-mcp/bin/imessage-agent-reader
-   ```
-2. Drag it into the list (or click **+**, press **⌘⇧G**, paste the path above) and switch it on.
+1. `setup` opens **System Settings → Privacy & Security → Full Disk Access** and shows **imessage-agent-reader** in Finder. It lives in the Applications folder inside your home folder (`~/Applications`).
+2. Drag it into the list and switch it on. Or click **+**, press **⌘⇧H**, open **Applications** and choose **imessage-agent-reader**.
 3. If `node` is in the list from an older version of this project, switch it off.
 4. `node src/cli.ts doctor` should show ✅ Full Disk Access.
 
@@ -135,7 +132,7 @@ node src/cli.ts uninstall                # disconnects your apps, removes the se
 node src/cli.ts uninstall --delete-data  # also deletes your items and logs
 ```
 
-Then remove `imessage-agent-reader` from Full Disk Access.
+Then remove `imessage-agent-reader` from Full Disk Access (uninstall deletes the app itself).
 
 ## Development
 

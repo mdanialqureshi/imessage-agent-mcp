@@ -1,5 +1,6 @@
 import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { paths } from '../config.ts';
 
@@ -12,8 +13,13 @@ export const READER_LABEL = 'com.imessage-agent-mcp.reader';
 
 export const usingMirror = () => process.env.IMESSAGE_AGENT_MIRROR === '1';
 
-/** Built by setup. Rebuilding changes its signature, so macOS asks for access again. */
-export const readerBinary = () => path.join(paths.stateDir, 'bin', 'imessage-agent-reader');
+/**
+ * Built by setup as a small app in ~/Applications, where Finder and the Full Disk Access file
+ * picker can find it (~/Library is hidden). Rebuilding changes its signature, so macOS asks
+ * for access again.
+ */
+export const readerApp = () => path.join(os.homedir(), 'Applications', 'imessage-agent-reader.app');
+export const readerBinary = (app = readerApp()) => path.join(app, 'Contents/MacOS/imessage-agent-reader');
 
 /**
  * How the reader is built and signed. The hardened runtime is essential: without it, anything
@@ -25,10 +31,30 @@ export const READER_BUILD = {
   codesign: ['--force', '--sign', '-', '--options', 'runtime', '--identifier', READER_LABEL],
 };
 
-/** Compiles and signs the reader to `out`. Tests pass `-DREADER_HOME=…` to aim it at a fake home. */
-export function compileReader(source: string, out: string, defines: string[] = []): void {
-  execFileSync('/usr/bin/cc', [...defines, ...READER_BUILD.cc, '-o', out, source], { stdio: ['ignore', 'pipe', 'pipe'] });
-  execFileSync('/usr/bin/codesign', [...READER_BUILD.codesign, out], { stdio: 'ignore' });
+/** The app's Info.plist: a background-only app, so opening it by hand just runs one copy. */
+export const READER_INFO = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>${READER_LABEL}</string>
+  <key>CFBundleName</key><string>imessage-agent-reader</string>
+  <key>CFBundleExecutable</key><string>imessage-agent-reader</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSBackgroundOnly</key><true/>
+</dict>
+</plist>
+`;
+
+/**
+ * Compiles the reader into a new app at `app` and signs it. Tests pass `-DREADER_HOME=…` to
+ * aim it at a fake home.
+ */
+export function compileReader(source: string, app: string, defines: string[] = []): void {
+  fs.mkdirSync(path.dirname(readerBinary(app)), { recursive: true });
+  fs.writeFileSync(path.join(app, 'Contents/Info.plist'), READER_INFO);
+  execFileSync('/usr/bin/cc', [...defines, ...READER_BUILD.cc, '-o', readerBinary(app), source], { stdio: ['ignore', 'pipe', 'pipe'] });
+  execFileSync('/usr/bin/codesign', [...READER_BUILD.codesign, app], { stdio: 'ignore' });
 }
 
 export interface ReaderStatus {

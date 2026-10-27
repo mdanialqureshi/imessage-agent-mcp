@@ -14,7 +14,7 @@ The code reads private message history, and the repo is shared publicly. **Nothi
 
 ## Layout
 
-- `helper/reader.c` — the only part with Full Disk Access: copies `chat.db` and Contacts into the state dir; its own launchd job
+- `helper/reader.c` — the only part with Full Disk Access: copies `chat.db` and Contacts into the state dir; built as `~/Applications/imessage-agent-reader.app`, its own launchd job
 - `src/messages/` — reading `chat.db` and Contacts (the reader's copy, in the service), conversation windows, privacy filters
 - `src/interpret/` — prompt, output schema, CLI runners, pipeline
 - `src/store.ts` — local state (items, runs) in `~/Library/Application Support/imessage-agent-mcp/`
