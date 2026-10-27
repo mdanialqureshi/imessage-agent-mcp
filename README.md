@@ -56,7 +56,7 @@ There is **no server on the internet, no tunnel, no public URL and no open netwo
 2. **The local bridge** (`node src/cli.ts connect`) is what your apps launch, like any local MCP server. It relays requests to the service's socket. Because the bridge reads nothing itself, your apps and your terminal don't need Full Disk Access.
 3. **Desktop apps are the interface.** `setup` registers the bridge with the ChatGPT desktop app (through its Codex config), the Claude desktop app, Claude Code and Cursor. Cloud agents never connect to your Mac directly. **Dot** works with your Mac through the ChatGPT desktop app once you allow computer access on its profile ([OpenAI docs](https://learn.chatgpt.com/docs/dots/computers-and-apps)). The goal is that asking Dot on your phone "what did I promise Ali?" works as long as the Mac is on, awake and running the app.
 
-> **Verified so far:** Claude Code, Codex and the Claude desktop app calling the tools on the Mac. **Not yet verified:** Dot reaching them through the ChatGPT desktop app. OpenAI documents that a connected Dot can run local Codex tasks, which use the Codex config `setup` writes, but doesn't explicitly mention MCP servers. This is the next milestone ([roadmap](docs/roadmap.md)); please open an issue with what you see.
+> **Verified so far:** Claude Code, Codex and the Claude desktop app calling the tools on the Mac. A Dot with computer access running a task on the Mac, where it reached the service over its socket and listed the tools. **Not yet:** Dot seeing them as native tools. In that first test the ChatGPT app launched the bridge, but the tools weren't in the Dot task's own tool list. Until they are, Dot can use them through the [`call` command](#without-mcp-the-call-command), which goes the same local route. This is the next milestone ([roadmap](docs/roadmap.md)); please open an issue with what you see.
 
 \*Claude from your phone: it should work wherever your Claude app hands the work to the Claude desktop app on your Mac (not yet verified). Otherwise, use it from the Mac.
 
@@ -114,10 +114,10 @@ Then run `node src/cli.ts doctor` any time to see the service, permission, inter
 
 Restart each desktop app after `setup` so it loads the `imessage` connection.
 
-**Dot (ChatGPT)** (not yet verified end to end; see above)
+**Dot (ChatGPT)** (native tools not yet verified; see above)
 1. Make sure the ChatGPT desktop app is installed on the Mac, signed in, and was restarted after `setup`.
 2. In the ChatGPT desktop app, open your Dot's profile → **Computers** → **Your computer** → **Allow access**, then confirm. You can revoke it there any time.
-3. Tell your Dot: *"When I ask about my texts, plans or commitments, use the `imessage` tools on my Mac."* Then try: *"What did I commit to in my texts this week?"*
+3. Tell your Dot: *"When I ask about my texts, plans or commitments, use the `imessage` tools on my Mac. If they aren't in your tool list, run `node <repo>/src/cli.ts call` on the Mac to list them, and `node <repo>/src/cli.ts call <tool> '<json args>'` to use one."* (`doctor` prints the exact command.) Then try: *"What did I commit to in my texts this week?"* Dot may ask you to approve running the command the first time.
 4. Set its cadence (below).
 
 **Claude desktop app**: restart it, open a chat, and ask *"Use the imessage tools: what do I owe people?"* Approve the tool when asked.
@@ -173,6 +173,19 @@ You can also set `"interpreter"` in `config.json`, or the `IMESSAGE_AGENT_INTERP
 | `refresh` | ✏️ | Interpret new messages now (usually unnecessary) |
 
 There is no tool that sends, edits or deletes messages. Read-only tools carry `readOnlyHint`, so agents that limit background work to read-only tools can still use them.
+
+### Without MCP: the `call` command
+
+Some agents can run commands on your Mac but don't load MCP servers into their tool list. For them, `call` sends one request through the same bridge to the same local service:
+
+```sh
+node src/cli.ts call                                   # list the tools
+node src/cli.ts call get_brief
+node src/cli.ts call search_messages '{"query":"tuesday","days":14}'
+node src/cli.ts call update_item '{"id":"…","status":"scheduled"}'
+```
+
+It prints the tool's text result, and exits with 1 on errors. It needs no permissions of its own. Like every other route, it only talks to the Unix socket on this Mac.
 
 ## Configuration
 

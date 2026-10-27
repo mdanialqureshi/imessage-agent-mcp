@@ -26,6 +26,7 @@
 
 ### M3: verify every front door
 - Confirm with a real Dot that work routed through the ChatGPT desktop app can call `get_brief`, including scheduled runs that notify the user
+  - First test (2026-10-27): the ChatGPT app launched the bridge and Dot's Mac task reached the service, but the `imessage` tools weren't in that task's tool list. `call` covers it meanwhile. Next: find out whether a fresh Dot task, or a setting, exposes them natively.
 - Confirm the same for Claude from the phone through the Claude desktop app
 - Clear "your Mac is offline" behavior in each agent
 

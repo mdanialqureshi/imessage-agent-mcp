@@ -1,5 +1,6 @@
 import http from 'node:http';
 import readline from 'node:readline';
+import { PassThrough } from 'node:stream';
 
 /** Shown to the agent (and in app logs) when the background service isn't reachable. */
 export const SERVICE_DOWN =
@@ -85,6 +86,37 @@ export function bridge(sock: string, input: NodeJS.ReadableStream = process.stdi
       pending.add(p);
     });
     rl.on('close', () => Promise.allSettled(pending).then(() => resolve()));
+  });
+}
+
+/**
+ * `call`: one MCP request through the bridge, for agents that can run commands on this Mac
+ * but don't load MCP servers into their tool list. With no tool name, lists the tools.
+ */
+export function callTool(sock: string, name?: string, args: Record<string, unknown> = {}): Promise<{ text: string; isError: boolean }> {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const send = (msg: unknown) => input.write(JSON.stringify(msg) + '\n');
+  const done = bridge(sock, input, output);
+  return new Promise((resolve) => {
+    readline.createInterface({ input: output }).on('line', (line) => {
+      const reply = JSON.parse(line);
+      if (reply.error) return resolve({ text: reply.error.message, isError: true });
+      if (reply.id === 1) {
+        send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+        send(name ? { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } } : { jsonrpc: '2.0', id: 2, method: 'tools/list' });
+        return input.end();
+      }
+      const result = reply.result ?? {};
+      if (!name) {
+        const tools: { name: string; description?: string }[] = result.tools ?? [];
+        return resolve({ text: tools.map((t) => `${t.name}: ${t.description ?? ''}`).join('\n'), isError: false });
+      }
+      const text = (result.content ?? []).map((c: { text?: string }) => c.text ?? '').join('\n');
+      resolve({ text, isError: Boolean(result.isError) });
+    });
+    send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'imessage-agent-cli', version: '1' } } });
+    done.then(() => output.end());
   });
 }
 

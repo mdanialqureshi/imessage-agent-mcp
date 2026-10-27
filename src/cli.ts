@@ -11,7 +11,7 @@ import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
 import { Conversations } from './messages/conversations.ts';
 import { APPS, which } from './apps.ts';
-import { bridge, type ServiceHealth, serviceHealth } from './bridge.ts';
+import { bridge, callTool, type ServiceHealth, serviceHealth } from './bridge.ts';
 import { serveSocket, socketPath } from './server.ts';
 import { Store } from './store.ts';
 
@@ -89,7 +89,11 @@ async function doctor(): Promise<void> {
     else if (app.registered()) console.log(`✅ ${app.name}: connected. ${app.reach}`);
     else console.log(`➖ ${app.name}: installed, not connected (optional: node src/cli.ts setup --apps ${app.id})`);
   }
+  console.log(`\nAgents that run commands but don't list the imessage tools (e.g. Dot, for now) can use:\n   ${callCommand()}            lists the tools\n   ${callCommand()} <tool> '<json args>'`);
 }
+
+/** The exact `call` command for this install, to paste into an agent's instructions. */
+const callCommand = () => `${which('node') ?? process.execPath} ${cliPath} call`;
 
 function waitForService(ms: number): Promise<ServiceHealth | null> {
   const until = Date.now() + ms;
@@ -172,11 +176,14 @@ async function setup(): Promise<void> {
 Done. How it fits together:
   Your messages ─► background service on this Mac ─► local bridge ─► ChatGPT / Claude desktop app ─► your agent
   Nothing listens on the network. Cloud agents (like Dot on your phone) can only reach the data through a desktop
-  app running on this Mac, so the Mac needs to be on and awake. (Dot via the ChatGPT app is not yet verified.)
+  app running on this Mac, so the Mac needs to be on and awake. (Dot reaches the Mac this way, but doesn't list the
+  imessage tools natively yet; it can use \`${callCommand()}\` meanwhile.)
 
 Next steps (also in the README, "Connect your agents"):
   • Restart Claude desktop and ChatGPT desktop so they load the new connection.
   • Dot: in the ChatGPT desktop app, open your Dot's profile → Computers → Allow access.
+  • Tell Dot: "For my texts, use the imessage tools on my Mac. If they aren't in your tool list, run
+    \`${callCommand()}\` to list them and \`${callCommand()} <tool> '<json args>'\` to use one."
   • Ask your agent: "Use the imessage tools: what did I commit to in my texts this week?"
   • Set your cadence: "Every day at 9am and 6pm, check my imessage brief and tell me what needs attention."`);
 }
@@ -339,6 +346,20 @@ async function main(): Promise<void> {
       return setup();
     case 'connect':
       return bridge(socketPath());
+    case 'call': {
+      let args: Record<string, unknown> = {};
+      if (rest[1]) {
+        try {
+          args = JSON.parse(rest[1]);
+        } catch {
+          throw new Error(`Arguments must be one JSON object, e.g. '{"query":"tuesday"}'`);
+        }
+      }
+      const res = await callTool(socketPath(), rest[0], args);
+      console.log(res.text);
+      if (res.isError) process.exitCode = 1;
+      return;
+    }
     case 'uninstall':
       return uninstall();
     case 'doctor':
@@ -391,6 +412,8 @@ Everyday
   brief [--since ISO] [--all]
                        Print the brief agents receive
   items [--all]        List tracked items
+  call [tool] [json]   Call an MCP tool through the service, for agents that run commands
+                       instead of loading MCP servers (no tool lists them)
 
 Plumbing
   connect              The local bridge apps launch (MCP over stdio → the service)

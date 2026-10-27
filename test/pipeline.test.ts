@@ -247,7 +247,7 @@ test('MCP server exposes read-only tools and updates status', async () => {
 
 test('service listens only on a private Unix socket, and the bridge relays MCP to it', async () => {
   const { serveSocket, socketPath } = await import('../src/server.ts');
-  const { bridge, serviceHealth, SERVICE_DOWN } = await import('../src/bridge.ts');
+  const { bridge, callTool, serviceHealth, SERVICE_DOWN } = await import('../src/bridge.ts');
   const { PassThrough } = await import('node:stream');
   fs.writeFileSync(socketPath(), ''); // a stale file from a crash must not block startup
   const service = await serveSocket({ autoInterpret: false });
@@ -285,6 +285,14 @@ test('service listens only on a private Unix socket, and the bridge relays MCP t
     assert.match(byId.get(1).result.instructions, /runs only on the user's Mac/);
     assert.ok(byId.get(2).result.tools.some((t: { name: string }) => t.name === 'get_brief'));
     assert.match(byId.get(3).result.content[0].text, /Open items/);
+
+    // `call`, for agents that run commands instead of loading MCP servers.
+    assert.match((await callTool(socketPath())).text, /^get_brief: /m);
+    assert.match((await callTool(socketPath(), 'get_status')).text, /Open items/);
+    const search = await callTool(socketPath(), 'search_messages', { query: 'tuesday' });
+    assert.equal(search.isError, false);
+    assert.match(search.text, /tuesday/i);
+    assert.equal((await callTool(socketPath(), 'nope')).isError, true);
   } finally {
     await new Promise((r) => service.close(r));
   }
@@ -294,6 +302,7 @@ test('service listens only on a private Unix socket, and the bridge relays MCP t
   const down = await relay([init]);
   assert.equal(down[0].id, 1);
   assert.equal(down[0].error.message, SERVICE_DOWN, 'apps get a clear message when the service is off');
+  assert.deepEqual(await callTool(socketPath(), 'get_status'), { text: SERVICE_DOWN, isError: true });
 });
 
 test('app registration merges into JSON configs without touching other servers', async () => {
