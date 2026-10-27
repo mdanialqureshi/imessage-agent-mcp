@@ -45,16 +45,22 @@ There is **no server on the internet, no tunnel, no public URL and no open netwo
                        │ Unix socket, readable only by you
                        ▼   (~/Library/Application Support/imessage-agent-mcp/mcp.sock)
         ┌──────────────────────────────┐
-        │ background service (launchd) │   the only piece with Full Disk Access
-        │  • reads chat.db + Contacts  │   read-only
+        │ background service (launchd) │   no special permissions
+        │  • reads the reader's copy   │
         │  • interprets new messages   │──► claude -p / codex exec (your subscription)
         │  • keeps the item list       │   state.db, private to you
+        └──────────────▲───────────────┘
+                       │ private copy (mirror/, 0600 files in the 0700 folder)
+        ┌──────────────┴───────────────┐
+        │ reader (its own launchd job) │   the only piece with Full Disk Access
+        │  copies chat.db + Contacts   │   no arguments, no input, nothing else
         └──────────────────────────────┘
 ```
 
-1. **The background service** starts at login, reads Messages and Contacts read-only, and every two hours turns new messages into items. It listens only on a Unix socket file in a private folder (`0700`), so only processes running as you can talk to it. Nothing on your network, or on the internet, can.
-2. **The local bridge** (`node src/cli.ts connect`) is what your apps launch, like any local MCP server. It relays requests to the service's socket. Because the bridge reads nothing itself, your apps and your terminal don't need Full Disk Access.
-3. **Desktop apps are the interface.** `setup` registers the bridge with the ChatGPT desktop app (through its Codex config), the Claude desktop app, Claude Code and Cursor. Cloud agents never connect to your Mac directly. **Dot** works with your Mac through the ChatGPT desktop app once you allow computer access on its profile ([OpenAI docs](https://learn.chatgpt.com/docs/dots/computers-and-apps)). The goal is that asking Dot on your phone "what did I promise Ali?" works as long as the Mac is on, awake and running the app.
+1. **The reader** (`helper/reader.c`, about 150 lines of C) is the only piece with Full Disk Access. It takes no arguments and does one thing: copy the Messages and Contacts databases into imessage-agent's private folder (instant APFS clones, so no extra disk space). The service asks launchd to run it whenever its copy is more than a minute old. macOS grants access per program, so `node`, your terminal and your apps never need Full Disk Access.
+2. **The background service** starts at login, reads the reader's copy, and every two hours turns new messages into items. It listens only on a Unix socket file in a private folder (`0700`), so only processes running as you can talk to it. Nothing on your network, or on the internet, can.
+3. **The local bridge** (`node src/cli.ts connect`) is what your apps launch, like any local MCP server. It relays requests to the service's socket. Because the bridge reads nothing itself, your apps and your terminal don't need Full Disk Access.
+4. **Desktop apps are the interface.** `setup` registers the bridge with the ChatGPT desktop app (through its Codex config), the Claude desktop app, Claude Code and Cursor. Cloud agents never connect to your Mac directly. **Dot** works with your Mac through the ChatGPT desktop app once you allow computer access on its profile ([OpenAI docs](https://learn.chatgpt.com/docs/dots/computers-and-apps)). The goal is that asking Dot on your phone "what did I promise Ali?" works as long as the Mac is on, awake and running the app.
 
 > **Verified so far:** Claude Code, Codex and the Claude desktop app calling the tools on the Mac. A Dot with computer access running a task on the Mac, where it reached the service over its socket and listed the tools. **Not yet:** Dot seeing them as native tools. In that first test the ChatGPT app launched the bridge, but the tools weren't in the Dot task's own tool list. Until they are, Dot can use them through the [`call` command](#without-mcp-the-call-command), which goes the same local route. This is the next milestone ([roadmap](docs/roadmap.md)); please open an issue with what you see.
 
@@ -98,7 +104,7 @@ node src/cli.ts setup --interpreter claude     # or: --interpreter codex
 `setup` does four things and reports each:
 
 1. **Checks the interpreter** is signed in with a subscription, and warns if an API key would be billed instead.
-2. **Installs the background service** (`~/Library/LaunchAgents/com.imessage-agent-mcp.plist`) and starts it.
+2. **Builds the reader and installs the background service.** It compiles `helper/reader.c` with Apple's Command Line Tools (which Homebrew already installed; otherwise `xcode-select --install`). It then installs two launch agents in `~/Library/LaunchAgents/`: `com.imessage-agent-mcp.reader` (the reader) and `com.imessage-agent-mcp` (the service).
 3. **Connects your installed apps** by registering the local bridge as an MCP server named `imessage`:
    - ChatGPT desktop / Codex (`~/.codex/config.toml`), for Dot
    - Claude desktop (`claude_desktop_config.json`, backed up first)
@@ -106,7 +112,7 @@ node src/cli.ts setup --interpreter claude     # or: --interpreter codex
    - Cursor (`~/.cursor/mcp.json`)
 
    Choose a subset with `--apps chatgpt,claude-desktop`.
-4. **Asks for Full Disk Access.** macOS requires you to grant this yourself. `setup` opens the right settings pane and prints the one binary to add (the `node` the service runs). Click **+**, press **⌘⇧G**, paste the path, and switch it on. That's the only permission anything needs. It's your shared Node binary, so any other Node program that launchd starts directly would get access too. A dedicated helper binary is on the [roadmap](docs/roadmap.md).
+4. **Asks for Full Disk Access for the reader only.** macOS requires you to grant this yourself. `setup` opens the right settings pane and prints the path to add: `~/Library/Application Support/imessage-agent-mcp/bin/imessage-agent-reader`. Click **+**, press **⌘⇧G**, paste the path, and switch it on. That's the only permission anything needs. **Don't** give `node` Full Disk Access: that would give it to every Node program launchd starts. The reader is rebuilt only when its source changes; a rebuild has a new signature, so macOS asks again.
 
 Then run `node src/cli.ts doctor` any time to see the service, permission, interpreter and connected apps at a glance. The first run reads the last 7 days in the background. Preview the result with `node src/cli.ts brief`.
 
@@ -205,8 +211,8 @@ It prints the tool's text result, starting with a line that marks message text a
 ## Privacy and security
 
 - **Local only, by design.** The service listens on a Unix socket (`0600`, inside a `0700` folder), never on a network port. There's no tunnel, relay or hosted component. Remote access exists only through desktop apps you run and sign in to yourself, and you can turn it off there (for example, Revoke access on your Dot's profile).
-- **Read-only.** `chat.db` is opened read-only, or as a snapshot copy. Nothing is ever sent, edited or deleted.
-- **One permission holder.** Only the service's `node` binary has Full Disk Access. Apps reach the data through the bridge, which has no permissions.
+- **Read-only.** The reader only reads Messages and Contacts, holding a read transaction so its copy is consistent. Nothing is ever sent, edited or deleted.
+- **One small permission holder.** Only the reader has Full Disk Access. It takes no arguments, reads no environment, writes only into the private folder (refusing it if it's a symlink, owned by someone else, or open to other users), and does nothing but copy those two databases. Anything that runs it gets only what the service already exposes: no Mail, Safari, Photos or other apps' data. The service, the bridge, `node` and your apps have no special permissions.
 - **Filtered before any model sees it.** Short-code senders, verification-code messages and your `privateContacts` are dropped on the Mac.
 - **Local state only**, in `~/Library/Application Support/imessage-agent-mcp/`: items, short evidence quotes, run history. All files are `0600`.
 - **The interpreter is a pure text-in, JSON-out call.** Message text is attacker-controlled, so the interpreter gets no tools, and it never loads the `imessage` connection that `setup` adds to your apps:
@@ -217,7 +223,7 @@ It prints the tool's text result, starting with a line that marks message text a
 - **Strangers are isolated.** A chat with anyone who isn't in your Contacts is interpreted on its own, and if its output is unusable, only that chat is dropped. Every change must cite messages from its own chat, and closing an item requires a new message. *Residual risk:* chats with saved contacts are batched together, so a contact's message could still steer how the model reads another contact's chat in the same batch.
 - **No forged structure.** Embedded newlines are collapsed everywhere (messages, group names, model output), so text can't forge transcript lines or brief sections. Interpreter output is never logged.
 - **Prompt injection reaches your agent too.** Tool results contain text other people wrote. The tool descriptions and the brief tell agents to treat it as data, but agents like Codex and Claude Code have their own tools (shell, files, web). Keep their approval prompts on, and don't let an agent act on a message's instructions.
-- **Threat model.** This protects against other people (through the messages they send you), the network, web pages, and other macOS users. It **can't** protect against malware already running as *your* user: that could talk to the socket, read the state files, or reuse the `node` binary you gave Full Disk Access to. A dedicated single-purpose helper binary is on the [roadmap](docs/roadmap.md).
+- **Threat model.** This protects against other people (through the messages they send you), the network, web pages, and other macOS users. It **can't** protect against malware already running as *your* user: that could talk to the socket, read the state files (including the copy of Messages), or run the reader. That gets it Messages and Contacts, but not the rest of what Full Disk Access covers.
 
 ## Limitations
 
@@ -228,11 +234,11 @@ It prints the tool's text result, starting with a line that marks message text a
 ## Uninstall
 
 ```sh
-node src/cli.ts uninstall                # disconnects every app and removes the service; keeps your items
+node src/cli.ts uninstall                # disconnects every app, removes the service, the reader and its copy of Messages; keeps your items
 node src/cli.ts uninstall --delete-data  # also deletes the item list and logs
 ```
 
-Then remove `node` from Full Disk Access in System Settings.
+Then remove `imessage-agent-reader` from Full Disk Access in System Settings. If you set this up before the reader existed, remove `node` from it too.
 
 ## Development
 

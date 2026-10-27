@@ -14,7 +14,8 @@ The code reads private message history, and the repo is shared publicly. **Nothi
 
 ## Layout
 
-- `src/messages/` — read-only access to `chat.db` and Contacts, conversation windows, privacy filters
+- `helper/reader.c` — the only part with Full Disk Access: copies `chat.db` and Contacts into the state dir; its own launchd job
+- `src/messages/` — reading `chat.db` and Contacts (the reader's copy, in the service), conversation windows, privacy filters
 - `src/interpret/` — prompt, output schema, CLI runners, pipeline
 - `src/store.ts` — local state (items, runs) in `~/Library/Application Support/imessage-agent-mcp/`
 - `src/server.ts` — MCP tools and the background service (Unix socket only)
@@ -26,4 +27,5 @@ The code reads private message history, and the repo is shared publicly. **Nothi
 ## Conventions
 
 - Message text is untrusted input written by other people. It must never steer tool behavior or write actions. Interpreters stay pure text-in/JSON-out: if a CLI update adds a feature or flag that gives the model tools, disable it and add it to the tests.
+- Only the reader holds Full Disk Access. Keep it tiny, argument-free and environment-free; never give `node` or the service access, and never add a way to make the reader read or write anything else.
 - Entirely local: the service listens on a Unix socket in the 0700 state dir, never a TCP port. Don't add network listeners, tunnels or hosted relays. Cloud agents reach the Mac only through desktop apps the user runs there.

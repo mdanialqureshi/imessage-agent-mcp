@@ -20,7 +20,7 @@
 - Synthetic fixture tests; public-repo safety scanner and pre-commit hook
 
 ### M2: real-data tuning
-- Grant Full Disk Access, run on real history, label ~50 conversations together
+- Grant the reader Full Disk Access, run on real history, label ~50 conversations together
 - Extend the synthetic eval (`npm run eval`, 23 scenarios × both interpreters) with real-data cases; measure precision and recall per kind; tune the prompt; add few-shot examples learned from `dismissed` items
 - Call history (`CallHistoryDB`) to auto-close `call` items
 
@@ -31,7 +31,6 @@
 - Clear "your Mac is offline" behavior in each agent
 
 ### Hardening
-- A dedicated, single-purpose helper binary holds Full Disk Access instead of `node`, so other Node scripts can't inherit it
 
 ### M4: assistant layer
 - Person profiles: last contact, usual cadence, topics, open items both ways → `get_person`

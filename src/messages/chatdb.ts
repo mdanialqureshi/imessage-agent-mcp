@@ -73,11 +73,11 @@ export function appleDateToJs(msSince2001: number | null): Date | null {
   return new Date(msSince2001 + APPLE_EPOCH_MS);
 }
 
-/** Removes snapshot copies left behind by a crash; live ones are at most a few seconds old. */
+/** Removes snapshot and half-made reader copies left by a crash; live ones are seconds old. */
 export function sweepSnapshots(maxAgeMs = 10 * 60_000): void {
   if (!fs.existsSync(paths.stateDir)) return;
   for (const name of fs.readdirSync(paths.stateDir)) {
-    if (!name.startsWith('snapshot')) continue;
+    if (!name.startsWith('snapshot') && !name.startsWith('mirror-new-')) continue;
     const dir = path.join(paths.stateDir, name);
     if (Date.now() - fs.statSync(dir).mtimeMs > maxAgeMs) fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -103,8 +103,8 @@ export class ChatDb {
         return ChatDb.openSnapshot(source);
       } catch (err: any) {
         throw new Error(
-          `Cannot read ${source} (${err.code ?? err.message}). Grant Full Disk Access to the app running this ` +
-            `(Terminal/iTerm, or the node binary for the background service), then restart it.`,
+          `Cannot read ${source} (${err.code ?? err.message}). From a terminal, give the terminal app Full Disk ` +
+            `Access; the background service instead uses its reader (see \`node src/cli.ts doctor\`).`,
         );
       }
     }

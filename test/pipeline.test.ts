@@ -492,3 +492,96 @@ test('interpreter defaults to claude and is switchable by config or environment'
     fs.writeFileSync(file, saved);
   }
 });
+
+test('the reader copies Messages and Contacts privately, and only into its own folder', { skip: process.platform !== 'darwin' && 'macOS only' }, async () => {
+  const { execFileSync, spawnSync } = await import('node:child_process');
+  const { DatabaseSync } = await import('node:sqlite');
+  const home = path.join(dir, 'reader-home');
+  fs.rmSync(home, { recursive: true, force: true });
+  const state = path.join(home, 'Library/Application Support/imessage-agent-mcp');
+  fs.mkdirSync(path.join(home, 'Library/Messages'), { recursive: true });
+  fs.mkdirSync(state, { recursive: true });
+  fs.chmodSync(state, 0o700);
+  fs.cpSync(process.env.ADDRESSBOOK_DIR!, path.join(home, 'Library/Application Support/AddressBook'), { recursive: true });
+  // A live database: WAL mode, rows not yet checkpointed, held open by a writer like Messages.
+  const chat = path.join(home, 'Library/Messages/chat.db');
+  fs.copyFileSync(process.env.IMESSAGE_DB_PATH!, chat);
+  const writer = new DatabaseSync(chat);
+  writer.exec('PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE pending(x); INSERT INTO pending VALUES (1), (2);');
+  const bin = path.join(home, 'reader');
+  const source = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'helper', 'reader.c');
+  execFileSync('/usr/bin/cc', ['-O2', '-Wall', '-Werror', `-DREADER_HOME="${home}"`, '-o', bin, source, '-lsqlite3']);
+  const run = () => spawnSync(bin, { encoding: 'utf8' }).status;
+  const status = () => fs.readFileSync(path.join(state, 'reader-status'), 'utf8');
+  const mirror = path.join(state, 'mirror');
+  try {
+    assert.equal(run(), 0);
+    assert.match(status(), /^ok \d+\n$/);
+    const copy = new DatabaseSync(path.join(mirror, 'chat.db'), { readOnly: true });
+    assert.equal(copy.prepare('SELECT count(*) AS n FROM pending').get()!.n, 2, 'rows still in the WAL are copied');
+    const live = ChatDb.open();
+    assert.equal(copy.prepare('SELECT max(ROWID) AS n FROM message').get()!.n, live.maxRowid());
+    live.close();
+    copy.close();
+    const files = fs.readdirSync(mirror, { recursive: true }) as string[];
+    assert.ok(files.some((f) => f.endsWith('AddressBook-v22.abcddb')), 'contacts are copied');
+    for (const f of files) {
+      const st = fs.statSync(path.join(mirror, f));
+      assert.equal(st.mode & 0o777, st.isDirectory() ? 0o700 : 0o600, `${f} is private`);
+      assert.doesNotMatch(f, /-(wal|shm)$/, 'copies are self-contained');
+    }
+    assert.equal(run(), 0, 'a second run swaps in a fresh copy');
+    assert.deepEqual(fs.readdirSync(state).filter((n) => n.startsWith('mirror')), ['mirror']);
+
+    fs.renameSync(chat, `${chat}.away`);
+    assert.equal(run(), 1, 'fails when Messages is unreadable');
+    assert.match(status(), /^error EFAIL \d+\n$/);
+    assert.ok(fs.existsSync(path.join(mirror, 'chat.db')), 'the last good copy is kept');
+    fs.renameSync(`${chat}.away`, chat);
+
+    fs.chmodSync(state, 0o755);
+    assert.equal(run(), 1, 'refuses a folder other users can open');
+    fs.chmodSync(state, 0o700);
+    fs.renameSync(state, `${state}-real`);
+    fs.symlinkSync(`${state}-real`, state);
+    assert.equal(run(), 1, 'refuses a symlinked folder');
+  } finally {
+    writer.close();
+  }
+});
+
+test("the service refreshes the reader's copy when it's stale, once for concurrent callers", async () => {
+  const { freshMirror, mirrorProblem, NEEDS_ACCESS } = await import('../src/messages/mirror.ts');
+  const file = path.join(process.env.IMESSAGE_AGENT_STATE_DIR!, 'reader-status');
+  const write = (line: string) => fs.writeFileSync(file, `${line}\n`);
+  let kicks = 0;
+  const kick = async () => {
+    kicks++;
+    setTimeout(() => write(`ok ${Date.now()}`), 50);
+  };
+  fs.rmSync(file, { force: true });
+  try {
+    const [a, b] = await Promise.all([freshMirror({ kick }), freshMirror({ kick })]);
+    assert.equal(kicks, 1, 'concurrent callers share one reader run');
+    assert.equal(a?.ok, true);
+    assert.deepEqual(a, b);
+    await freshMirror({ kick });
+    assert.equal(kicks, 1, 'a fresh copy is reused');
+    write(`ok ${Date.now() - 120_000}`);
+    await freshMirror({ kick });
+    assert.equal(kicks, 2, 'a stale copy is refreshed');
+
+    write(`ok ${Date.now() - 120_000}`);
+    const denied = await freshMirror({ kick: async () => write(`error EPERM ${Date.now()}`) });
+    assert.equal(mirrorProblem(denied), NEEDS_ACCESS);
+    write(`error EFAIL ${Date.now() - 1000}`);
+    const stuck = await freshMirror({ kick: async () => {}, waitMs: 300 });
+    assert.equal(stuck?.error, 'EFAIL', "a reader that doesn't answer leaves the last status");
+    assert.match(mirrorProblem(stuck)!, /couldn't copy Messages/);
+    assert.equal(mirrorProblem(null), NEEDS_ACCESS);
+    write('garbage');
+    assert.equal(mirrorProblem((await import('../src/messages/mirror.ts')).readerStatus()), NEEDS_ACCESS);
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+});

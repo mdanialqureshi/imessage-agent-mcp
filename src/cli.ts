@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildBrief, formatItem } from './brief.ts';
-import { type Config, configPath, INTERPRETERS, type InterpreterName, loadConfig, loadConfigDefaults, paths, saveConfig } from './config.ts';
+import { type Config, configPath, ensureStateDir, INTERPRETERS, type InterpreterName, loadConfig, loadConfigDefaults, paths, saveConfig } from './config.ts';
 import { interpretNow } from './interpret/run.ts';
 import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
 import { Conversations } from './messages/conversations.ts';
+import { READER_LABEL, readerBinary, readerStatus } from './messages/mirror.ts';
 import { APPS, which } from './apps.ts';
 import { bridge, callTool, type ServiceHealth, serviceHealth } from './bridge.ts';
 import { serveSocket, socketPath } from './server.ts';
@@ -17,6 +19,7 @@ import { Store } from './store.ts';
 
 const LABEL = 'com.imessage-agent-mcp';
 const plistPath = path.join(os.homedir(), 'Library/LaunchAgents', `${LABEL}.plist`);
+const readerPlistPath = path.join(os.homedir(), 'Library/LaunchAgents', `${READER_LABEL}.plist`);
 const cliPath = fileURLToPath(import.meta.url);
 
 const [command, ...rest] = process.argv.slice(2);
@@ -36,9 +39,6 @@ function check(label: string, fn: () => string): boolean {
   }
 }
 
-/** The binary that needs Full Disk Access: the node the background service runs. */
-const serviceNode = () => fs.realpathSync(process.execPath);
-
 /** What desktop apps launch: the permission-less bridge to the background service. */
 function bridgeCommand(): string[] {
   // The stable Homebrew/nvm symlink survives Node upgrades better than the versioned binary.
@@ -46,13 +46,38 @@ function bridgeCommand(): string[] {
 }
 
 function fdaHelp(): string {
-  return `Give the background service Full Disk Access (macOS requires you to do this yourself):
+  return `Give imessage-agent's reader Full Disk Access (macOS requires you to do this yourself):
   1. System Settings → Privacy & Security → Full Disk Access
   2. Click +, press ⌘⇧G, paste the path below, press Return, then Open:
-     ${serviceNode()}
+     ${readerBinary()}
   3. Make sure its switch is on.
-  Only this one binary needs it. Your apps and terminal don't.
-  Note: this is your shared Node, so other Node programs started directly by launchd would get access too.`;
+  The reader only copies Messages and Contacts into imessage-agent's private folder; it takes no
+  input and can't be pointed at anything else. Node, your terminal and your apps don't need access.
+  If you gave node Full Disk Access for this earlier, you can turn that off.`;
+}
+
+const readerSource = path.join(path.dirname(cliPath), '..', 'helper', 'reader.c');
+
+/**
+ * Compiles the reader with Apple's Command Line Tools, only when its source changed: a new
+ * build has a new signature, so macOS asks for Full Disk Access again. Returns true if built.
+ */
+function buildReader(): boolean {
+  const bin = readerBinary();
+  const stamp = `${bin}.sha256`;
+  const hash = createHash('sha256').update(fs.readFileSync(readerSource)).digest('hex');
+  if (fs.existsSync(bin) && fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8').trim() === hash) return false;
+  if (spawnSync('xcode-select', ['-p'], { stdio: 'ignore' }).status !== 0) {
+    throw new Error("its reader is built with Apple's Command Line Tools: run `xcode-select --install`, then setup again");
+  }
+  ensureStateDir();
+  fs.mkdirSync(path.dirname(bin), { recursive: true, mode: 0o700 });
+  const tmp = `${bin}.new`;
+  execFileSync('/usr/bin/cc', ['-O2', '-Wall', '-o', tmp, readerSource, '-lsqlite3'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', READER_LABEL, tmp], { stdio: 'ignore' });
+  fs.renameSync(tmp, bin);
+  fs.writeFileSync(stamp, hash + '\n');
+  return true;
 }
 
 async function doctor(): Promise<void> {
@@ -66,8 +91,13 @@ async function doctor(): Promise<void> {
   });
   if (health) {
     const ok = check('Full Disk Access', () => {
-      if (!health.canReadMessages) throw new Error("the service can't read Messages yet");
-      return `the service can read Messages (${health.messages.toLocaleString()} messages, ${health.contacts} contact handles)`;
+      if (!fs.existsSync(readerBinary())) throw new Error('the reader is missing (run: node src/cli.ts setup)');
+      if (!health.canReadMessages) {
+        throw new Error(readerStatus()?.error === 'EFAIL'
+          ? `the reader couldn't copy Messages; see ${path.join(paths.stateDir, 'logs/reader.log')}`
+          : "the reader doesn't have it yet, so the service can't read Messages");
+      }
+      return `only the reader has it, and the service can read its copy (${health.messages.toLocaleString()} messages, ${health.contacts} contact handles)`;
     });
     if (!ok) console.log(fdaHelp().replace(/^/gm, '   '));
   }
@@ -125,6 +155,13 @@ async function setup(): Promise<void> {
   }
 
   console.log('\n2. Background service (runs on this Mac at login; Unix socket only, no network port)');
+  try {
+    if (buildReader()) console.log(`   Built its reader, the only part that will hold Full Disk Access: ${readerBinary()}`);
+  } catch (err: any) {
+    console.log(`   ❌ ${err.message.split('\n')[0]}`);
+    process.exitCode = 1;
+    return;
+  }
   installService();
   const health = await waitForService(15_000);
   if (!health) {
@@ -160,9 +197,7 @@ async function setup(): Promise<void> {
       console.log('\n   Waiting for access (Ctrl-C to finish later with: node src/cli.ts doctor)…');
       for (let i = 0; i < 120 && !access?.canReadMessages; i++) {
         await new Promise((r) => setTimeout(r, 5000));
-        // macOS can cache the denial in a running process, so restart it now and then.
-        if (i % 4 === 3) execFileSync('launchctl', ['kickstart', '-k', `gui/${process.getuid!()}/${LABEL}`]);
-        access = await waitForService(10_000);
+        access = await waitForService(20_000); // Each check runs the reader again.
       }
     }
   }
@@ -175,7 +210,8 @@ async function setup(): Promise<void> {
 
   console.log(`
 Done. How it fits together:
-  Your messages ─► background service on this Mac ─► local bridge ─► ChatGPT / Claude desktop app ─► your agent
+  Messages ─► reader (the only part with Full Disk Access) ─► private copy ─► background service ─► local bridge
+    ─► ChatGPT / Claude desktop app ─► your agent
   Nothing listens on the network. Cloud agents (like Dot on your phone) can only reach the data through a desktop
   app running on this Mac, so the Mac needs to be on and awake. (Dot reaches the Mac this way, but doesn't list the
   imessage tools natively yet; it can use \`${callCommand()}\` meanwhile.)
@@ -205,7 +241,7 @@ function uninstall(): void {
     fs.rmSync(paths.stateDir, { recursive: true, force: true });
     console.log(`Deleted ${paths.stateDir}`);
   } else console.log(`Kept your items in ${paths.stateDir} (add --delete-data to remove them).`);
-  console.log(`You can also remove ${serviceNode()} from Full Disk Access in System Settings.`);
+  console.log('You can also remove imessage-agent-reader from Full Disk Access in System Settings.');
 }
 
 /**
@@ -278,12 +314,11 @@ const xml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 
 function plist(): string {
   const config = loadConfig();
-  const logDir = path.join(paths.stateDir, 'logs');
-  fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
   // Both CLIs are pinned when installed (not realpath'd: self-updating CLIs keep a stable
   // symlink), so `use codex` / `use claude` works without reinstalling.
   const env: Record<string, string> = {
     PATH: [path.dirname(fs.realpathSync(process.execPath)), '/usr/bin', '/bin'].join(':'),
+    IMESSAGE_AGENT_MIRROR: '1', // Read the reader's copy; node itself holds no special access.
   };
   for (const name of INTERPRETERS) {
     const found = which(name);
@@ -294,20 +329,36 @@ function plist(): string {
   }
   const envXml = Object.entries(env).map(([k, v]) => `<key>${xml(k)}</key><string>${xml(v)}</string>`).join('');
   const args = [process.execPath, cliPath, 'serve'].map((a) => `    <string>${xml(a)}</string>`).join('\n');
-  const log = xml(path.join(logDir, 'service.log'));
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>${LABEL}</string>
-  <key>ProgramArguments</key>
+  return launchdPlist(LABEL, 'service.log', `  <key>ProgramArguments</key>
   <array>
 ${args}
   </array>
   <key>EnvironmentVariables</key>
   <dict>${envXml}</dict>
+  <key>KeepAlive</key><true/>`);
+}
+
+/**
+ * The reader is its own launchd job, so macOS attributes its file access to it alone and
+ * node never needs Full Disk Access. It runs at login and whenever the service asks
+ * (`launchctl kickstart`), with no arguments or environment of ours.
+ */
+function readerPlist(): string {
+  return launchdPlist(READER_LABEL, 'reader.log', `  <key>Program</key><string>${xml(readerBinary())}</string>
+  <key>ProcessType</key><string>Background</string>`);
+}
+
+function launchdPlist(label: string, logName: string, body: string): string {
+  const logDir = path.join(paths.stateDir, 'logs');
+  fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
+  const log = xml(path.join(logDir, logName));
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${label}</string>
+${body}
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
   <key>Umask</key><integer>63</integer>
   <key>StandardOutPath</key><string>${log}</string>
   <key>StandardErrorPath</key><string>${log}</string>
@@ -316,28 +367,34 @@ ${args}
 `;
 }
 
-function installService(): void {
-  const uid = process.getuid!();
-  fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+const bootout = (file: string) => {
   try {
-    execFileSync('launchctl', ['bootout', `gui/${uid}`, plistPath], { stdio: 'ignore' });
+    execFileSync('launchctl', ['bootout', `gui/${process.getuid!()}`, file], { stdio: 'ignore' });
   } catch {
-    // Not loaded yet.
+    // Not loaded.
   }
-  fs.writeFileSync(plistPath, plist());
-  execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath]);
-  console.log(`   Installed ${LABEL} (logs: ${path.join(paths.stateDir, 'logs/service.log')})`);
+};
+
+function installService(): void {
+  if (!fs.existsSync(readerBinary())) throw new Error('the reader is missing; run: node src/cli.ts setup');
+  fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+  for (const [file, content] of [[readerPlistPath, readerPlist()], [plistPath, plist()]]) {
+    bootout(file);
+    fs.writeFileSync(file, content);
+    execFileSync('launchctl', ['bootstrap', `gui/${process.getuid!()}`, file]);
+  }
+  console.log(`   Installed ${READER_LABEL} and ${LABEL} (logs: ${path.join(paths.stateDir, 'logs')})`);
 }
 
+/** Also deletes the reader and its copy of Messages, which setup recreates. */
 function uninstallService(): void {
-  try {
-    execFileSync('launchctl', ['bootout', `gui/${process.getuid!()}`, plistPath], { stdio: 'ignore' });
-  } catch {
-    // Already stopped.
+  for (const file of [plistPath, readerPlistPath]) {
+    bootout(file);
+    fs.rmSync(file, { force: true });
   }
-  fs.rmSync(plistPath, { force: true });
   fs.rmSync(socketPath(), { force: true });
-  console.log(`Removed the background service (${LABEL}).`);
+  for (const name of ['mirror', 'reader-status', 'bin']) fs.rmSync(path.join(paths.stateDir, name), { recursive: true, force: true });
+  console.log(`Removed the background service (${LABEL}), its reader and its copy of Messages.`);
 }
 
 async function main(): Promise<void> {
@@ -396,6 +453,7 @@ async function main(): Promise<void> {
     case 'use':
       return useInterpreter(rest[0]);
     case 'install-service':
+      buildReader();
       return installService();
     case 'uninstall-service':
       return uninstallService();

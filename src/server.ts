@@ -10,6 +10,7 @@ import { type Config, ensureStateDir, loadConfig, paths } from './config.ts';
 import { interpretNow, type RunResult } from './interpret/run.ts';
 import { ChatDb, type Message } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
+import { freshMirror, mirrorProblem, NEEDS_ACCESS, usingMirror } from './messages/mirror.ts';
 import { Conversations, displayText, formatTime, isFilteredText } from './messages/conversations.ts';
 import { KINDS, STATUSES, Store } from './store.ts';
 import { clip, oneLine } from './text.ts';
@@ -27,7 +28,7 @@ let running: Promise<RunResult> | null = null;
  * re-read each run, so `use claude|codex` takes effect without restarting the service.
  */
 export function startInterpretation(): Promise<RunResult> {
-  running ??= Promise.resolve()
+  running ??= readable()
     .then(() => interpretNow({ config: loadConfig() }))
     .finally(() => (running = null));
   return running;
@@ -42,12 +43,20 @@ function withStore<T>(fn: (store: Store) => T): T {
   }
 }
 
-function withMessages<T>(config: Config, fn: (db: ChatDb, conv: Conversations) => T): T {
+/** In the service, refreshes the reader's copy first; throws a message meant for the agent. */
+async function readable(): Promise<void> {
+  if (!usingMirror()) return;
+  const problem = mirrorProblem(await freshMirror());
+  if (problem) throw new Error(problem);
+}
+
+async function withMessages<T>(config: Config, fn: (db: ChatDb, conv: Conversations) => T): Promise<T> {
+  await readable();
   let db: ChatDb;
   try {
     db = ChatDb.open();
   } catch {
-    throw new Error("The imessage-agent service on the user's Mac can't read Messages yet: it needs Full Disk Access (run `node src/cli.ts doctor` on the Mac).");
+    throw new Error(NEEDS_ACCESS);
   }
   try {
     return fn(db, new Conversations(db, Contacts.load(), config));
@@ -121,7 +130,7 @@ export function createServer(config: Config): McpServer {
       const item = withStore((s) => s.getItem(id));
       if (!item) return text(`No item ${id}.`);
       const lastEvidence = Math.max(0, ...item.evidence.map((e) => e.rowid));
-      const convo = withMessages(config, (db, conv) => {
+      const convo = await withMessages(config, (db, conv) => {
         const chat = db.chat(item.chatId);
         if (!chat || conv.isExcluded(chat)) return [];
         return db.messagesBefore(item.chatId, lastEvidence + 8, context_messages ?? 20).map((m) => renderMessage(conv, m));
@@ -167,7 +176,7 @@ export function createServer(config: Config): McpServer {
     async (args) => {
       const needle = args.with.toLowerCase();
       const since = new Date(Date.now() - (args.days ?? 7) * 86400_000);
-      const out = withMessages(config, (db, conv) =>
+      const out = await withMessages(config, (db, conv) =>
         db
           .allChats()
           .filter((c) => !conv.isExcluded(c))
@@ -195,7 +204,7 @@ export function createServer(config: Config): McpServer {
     async ({ query, days, limit }) => {
       const needle = query.toLowerCase();
       const since = new Date(Date.now() - (days ?? 30) * 86400_000);
-      const hits = withMessages(config, (db, conv) =>
+      const hits = await withMessages(config, (db, conv) =>
         db
           .messagesSince(since, 50_000)
           .filter((m) => m.text?.toLowerCase().includes(needle) && !isFilteredText(m.text))
@@ -270,8 +279,9 @@ export function socketPath(): string {
 }
 
 /** What the service itself can read; only counts, never content. */
-function access(): { canReadMessages: boolean; messages: number; contacts: number } {
+async function access(): Promise<{ canReadMessages: boolean; messages: number; contacts: number }> {
   try {
+    await readable();
     const db = ChatDb.open();
     const messages = db.maxRowid();
     db.close();
@@ -311,7 +321,7 @@ export async function serveSocket(opts: { autoInterpret?: boolean } = {}): Promi
     const url = new URL(req.url ?? '/', 'http://localhost');
     if (url.pathname === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, interpreter: loadConfig().interpreter, ...access() }));
+      res.end(JSON.stringify({ ok: true, interpreter: loadConfig().interpreter, ...(await access()) }));
       return;
     }
     if (url.pathname !== '/mcp') {

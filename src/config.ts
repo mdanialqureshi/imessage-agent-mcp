@@ -34,13 +34,21 @@ const defaults: Config = {
   skipShortCodes: true,
 };
 
+const stateDir =
+  process.env.IMESSAGE_AGENT_STATE_DIR ?? path.join(os.homedir(), 'Library/Application Support/imessage-agent-mcp');
+/**
+ * The background service reads copies made by imessage-agent-reader (helper/reader.c), the
+ * only part holding Full Disk Access; its launchd job sets IMESSAGE_AGENT_MIRROR=1.
+ * Terminal commands read the live files with the terminal's own access.
+ */
+const mirror = process.env.IMESSAGE_AGENT_MIRROR === '1' ? path.join(stateDir, 'mirror') : null;
+
 export const paths = {
-  chatDb: process.env.IMESSAGE_DB_PATH ?? path.join(os.homedir(), 'Library/Messages/chat.db'),
+  chatDb: process.env.IMESSAGE_DB_PATH ?? (mirror ? path.join(mirror, 'chat.db') : path.join(os.homedir(), 'Library/Messages/chat.db')),
   addressBookDir:
-    process.env.ADDRESSBOOK_DIR ?? path.join(os.homedir(), 'Library/Application Support/AddressBook'),
-  stateDir:
-    process.env.IMESSAGE_AGENT_STATE_DIR ??
-    path.join(os.homedir(), 'Library/Application Support/imessage-agent-mcp'),
+    process.env.ADDRESSBOOK_DIR ??
+    (mirror ? path.join(mirror, 'AddressBook') : path.join(os.homedir(), 'Library/Application Support/AddressBook')),
+  stateDir,
 };
 
 export function configPath(): string {
