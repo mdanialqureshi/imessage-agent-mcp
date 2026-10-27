@@ -2,13 +2,13 @@
 
 **Give your AI assistant the context that lives in your texts, without your messages leaving your Mac's control.**
 
-You text a friend "let's chill" in reply to "what are you saying on Tuesday?", and you never put it in your calendar. Your assistant (ChatGPT's Dot, Claude, or anything else that speaks [MCP](https://modelcontextprotocol.io)) can't help, because it can't see iMessage.
+You text a friend "let's chill" in reply to "What are you doing on tuesday?", and you never put it in your calendar. Your assistant (ChatGPT's Dot, Claude, or anything else that speaks [MCP](https://modelcontextprotocol.io)) can't help, because it can't see iMessage.
 
 This runs **entirely on your Mac**. It reads your Messages database **read-only**, understands the conversations the way a friend in the chat would, and keeps a list of:
 
 | Kind | Example |
 |---|---|
-| `plan` | "yo what are you saying on tuesday?" → "let's chill" |
+| `plan` | "yo what are you doing on tuesday?" → "let's chill" |
 | `call` | "will call you later today" |
 | `task` | "yeah I'll send it tonight" |
 | `follow_up` | "lemme check and get back to you" |
