@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { buildBrief, formatItem } from './brief.ts';
 import { configPath, loadConfig, paths } from './config.ts';
 import { interpretNow } from './interpret/run.ts';
-import { ChatDb } from './messages/chatdb.ts';
+import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
 import { Conversations } from './messages/conversations.ts';
 import { httpToken, serveHttp, serveStdio } from './server.ts';
@@ -79,7 +79,9 @@ function exportConversations(): void {
   const out = windows.map((w) => conv.render(w)).join('\n\n---\n\n');
   const file = option('out');
   if (file) {
-    fs.writeFileSync(file, out + '\n');
+    // Transcripts are private: readable only by this user.
+    fs.writeFileSync(file, out + '\n', { mode: 0o600 });
+    fs.chmodSync(file, 0o600);
     console.log(`Wrote ${windows.length} conversations to ${file}`);
   } else console.log(out);
   db.close();
@@ -164,6 +166,7 @@ function uninstallService(): void {
 }
 
 async function main(): Promise<void> {
+  sweepSnapshots();
   switch (command) {
     case 'doctor':
       return doctor();

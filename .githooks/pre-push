@@ -1,0 +1,3 @@
+#!/bin/sh
+# Last gate before content becomes public: full scan, commit authors and messages, tests.
+node scripts/check-public-safety.mjs --all --check-authors && npm test --silent

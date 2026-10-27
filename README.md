@@ -119,10 +119,11 @@ Read-only tools carry `readOnlyHint`, so agents that limit background work to re
 - **Local state only**, in `~/Library/Application Support/imessage-agent-mcp/`: items, short evidence quotes, run history.
 - **The HTTP endpoint is loopback-only and authenticated.** It refuses to bind to anything but localhost. It rejects requests whose `Host` or `Origin` isn't local, which blocks web pages using DNS rebinding. It requires a bearer token (`node src/cli.ts token`), and the state directory is `0700`, with files `0600`.
 - **The interpreter is a pure text-in, JSON-out call.** Message text is attacker-controlled, so the interpreter gets no tools:
-  - `codex exec`: shell and exec tools disabled, `--ignore-user-config` (so none of your MCP servers or hooks), `--ephemeral`, read-only sandbox.
+  - `codex exec`: **every** enabled Codex feature is disabled, read from `codex features list` at runtime. That covers shell and exec, ChatGPT connectors (apps and plugins), code mode, sub-agents, browser and computer use, and memories. It also runs with `--ignore-user-config`, `--ephemeral` and a read-only sandbox.
   - `claude -p`: `--tools ""`, an empty `--strict-mcp-config`, no setting sources, `--no-session-persistence`.
-
-  Embedded newlines are collapsed, so a message can't forge transcript lines or brief sections. Interpreter output is never logged, because it can echo message text.
+- **Fail closed.** Codex's event stream is checked after every call. If the model tried any tool call, which only an injected instruction would cause, that batch's output is thrown away.
+- **Strangers are isolated.** A chat with anyone who isn't in your Contacts is interpreted on its own, so their text never shares a prompt with your other conversations. Every change must cite messages from its own chat, and closing an item requires a new message.
+- **No forged structure.** Embedded newlines are collapsed everywhere (messages, group names, model output), so text can't forge transcript lines or brief sections. Interpreter output is never logged, because it can echo message text.
 - **Prompt injection.** Messages are written by other people. The interpreter prompt, tool descriptions and the brief all tell models to treat message text as data. The server has no tool that sends messages, and the only write is changing an item's status. Your agent still decides what to do with its own tools, so keep it asking before acting.
 - **Threat model.** This protects against other people (via the messages they send you), web pages, and other macOS users. It **can't** protect against malware already running as *your* user. Such malware could read the token and state files, or reuse the `node` binary you gave Full Disk Access to. A dedicated single-purpose helper binary is on the [roadmap](docs/roadmap.md).
 - **What leaves your Mac:** conversation windows go to your interpreter's provider (OpenAI or Anthropic, under your plan's terms), and whatever your connected agents request goes to them. Nothing else.
@@ -139,7 +140,7 @@ Read-only tools carry `readOnlyHint`, so agents that limit background work to re
 ```sh
 npm test              # synthetic fixture tests (no real data, no model calls)
 npm run safety        # secret/PII scan of staged files (also the pre-commit hook)
-git config core.hooksPath .githooks
+git config core.hooksPath .githooks   # pre-commit: staged-file scan; pre-push: full scan + authors + tests
 ```
 
 Try the real interpreter on synthetic conversations without touching your messages:

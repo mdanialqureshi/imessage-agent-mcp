@@ -4,6 +4,9 @@ const ACTIVE = ['open'];
 const SAVED_KINDS = new Set(['fact', 'recommendation']);
 const LOW_CONFIDENCE = 0.5;
 
+/** Item text is model output derived from untrusted messages; it must not add lines. */
+const oneLine = (s: string) => s.replace(/\s*[\r\n\u2028\u2029]+\s*/g, ' ');
+
 function localDate(d: Date): string {
   return d.toLocaleDateString('en-CA');
 }
@@ -13,15 +16,13 @@ function addDays(d: Date, days: number): Date {
 }
 
 function whenLabel(i: Item): string {
-  if (!i.whenStart) return i.whenText ?? '';
+  if (!i.whenStart) return oneLine(i.whenText ?? '');
   const date = new Date(i.whenStart.length === 10 ? `${i.whenStart}T12:00` : i.whenStart);
-  if (Number.isNaN(date.getTime())) return i.whenText ?? i.whenStart;
+  if (Number.isNaN(date.getTime())) return oneLine(i.whenText ?? i.whenStart);
   const day = date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   const time = i.precision === 'exact' ? ' ' + date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : '';
-  return `${day}${time}${i.whenText ? ` ("${i.whenText}")` : ''}`;
+  return `${day}${time}${i.whenText ? ` ("${oneLine(i.whenText)}")` : ''}`;
 }
-
-const oneLine = (s: string) => s.replace(/\s*[\r\n\u2028\u2029]+\s*/g, ' ');
 
 export function formatItem(i: Item, opts: { since?: string; evidence?: number } = {}): string {
   const isNew = opts.since && i.createdAt > opts.since ? '🆕 ' : '';
@@ -30,7 +31,7 @@ export function formatItem(i: Item, opts: { since?: string; evidence?: number } 
     .join(' · ');
   const lines = [`- ${isNew}**${oneLine(i.title)}** — ${oneLine(i.chatLabel)} · ${meta} · \`${i.id}\``];
   if (i.detail) lines.push(`  ${oneLine(i.detail)}`);
-  if (i.missingDetails.length) lines.push(`  Missing: ${i.missingDetails.join(', ')}`);
+  if (i.missingDetails.length) lines.push(`  Missing: ${oneLine(i.missingDetails.join(', '))}`);
   for (const e of i.evidence.slice(-(opts.evidence ?? 2))) lines.push(`  > ${oneLine(e.from)} (${e.date}): ${oneLine(e.text)}`);
   if (i.suggestedAction !== 'none') lines.push(`  Suggested: ${i.suggestedAction.replace('_', ' ')}`);
   return lines.join('\n');

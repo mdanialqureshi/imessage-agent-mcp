@@ -39,6 +39,11 @@ function refFor(prompt: string, label: string): string {
   return match[1];
 }
 
+/** Interpreter calls are batched, so fake runners only answer for chats in the current prompt. */
+function present(prompt: string, ...ops: [string, Partial<RawOp>][]): RawOp[] {
+  return ops.filter(([label]) => prompt.includes(`— ${label}`)).map(([label, o]) => op({ chat_ref: refFor(prompt, label), ...o }));
+}
+
 function op(fields: Partial<RawOp>): RawOp {
   return {
     op: 'create', item_id: null, chat_ref: 'C1', kind: 'plan', title: 'x', detail: null, person: null,
@@ -74,7 +79,7 @@ test('never exposes short-code senders or verification codes', () => {
 test('message text cannot forge transcript lines, and codes in normal chats are masked', () => {
   const { db, text } = windows();
   assert.doesNotMatch(text, /^#999/m, 'embedded newline must not start a fake message line');
-  assert.match(text, /Eve Mallory: hey ⏎ #999/);
+  assert.match(text, /\+12125550107: hey ⏎ #999/);
   assert.doesNotMatch(text, /731904/);
   db.close();
 });
@@ -82,9 +87,10 @@ test('message text cannot forge transcript lines, and codes in normal chats are 
 test('interpreters run with no shell, MCP servers, user config or session files', async () => {
   const { codexArgs, claudeArgs } = await import('../src/interpret/runners.ts');
   const codex = codexArgs('/tmp/x', '/tmp/x/s.json', '/tmp/x/o.json', null).join(' ');
-  for (const flag of ['--ephemeral', '--ignore-user-config', '--ignore-rules', '--disable shell_tool', '--disable unified_exec', '--sandbox read-only']) {
+  for (const flag of ['--ephemeral', '--ignore-user-config', '--ignore-rules', '--disable shell_tool', '--disable unified_exec', '--disable apps', '--disable plugins', '--disable remote_plugin', '--disable code_mode_host', '--disable multi_agent', '--sandbox read-only', '--json']) {
     assert.ok(codex.includes(flag), `codex ${flag}`);
   }
+  assert.ok(codexArgs('/tmp/x', '/a', '/b', null, ['some_future_tool']).join(' ').includes('--disable some_future_tool'), 'every enabled feature is disabled');
   const claude = claudeArgs(null);
   assert.equal(claude[claude.indexOf('--tools') + 1], '', 'claude has no tools');
   assert.equal(claude[claude.indexOf('--setting-sources') + 1], '', 'claude ignores user settings and hooks');
@@ -107,20 +113,31 @@ test('prompt carries the current time and reply threshold', () => {
 
 test('interpretation creates, updates and closes items without duplicates', async () => {
   const config = loadConfig();
+  const prompts: string[] = [];
   const first = await interpretNow({
     config,
     now: NOW,
     runner: async (prompt) => {
-      assert.match(prompt, /Existing items for C\d+:\n\(none\)/);
+      prompts.push(prompt);
       return [
-        op({ chat_ref: refFor(prompt, 'Ali Rahman'), title: 'Chill with Ali', person: 'Ali', when_start: '2026-10-27T18:00', when_text: 'tuesday, after work', precision: 'part_of_day', suggested_action: 'calendar_event', evidence: [16, 17] }),
-        op({ chat_ref: refFor(prompt, 'Maya Chen'), kind: 'task', title: 'Send Maya the resume template', evidence: [5] }),
-        op({ chat_ref: refFor(prompt, 'Zara Khan'), kind: 'iou', title: 'Venmo Zara for tickets', evidence: [12] }),
-        op({ chat_ref: 'C99', title: 'bogus chat ref' }),
+        ...present(
+          prompt,
+          ['Ali Rahman', { title: 'Chill with Ali', person: 'Ali', when_start: '2026-10-27T18:00', when_text: 'tuesday, after work', precision: 'part_of_day', suggested_action: 'calendar_event', evidence: [16, 17] }],
+          ['Maya Chen', { kind: 'task', title: 'Send Maya the resume template', evidence: [5] }],
+          ['Zara Khan', { kind: 'iou', title: 'Venmo Zara for tickets', evidence: [12] }],
+          ['Mom', { kind: 'call', title: 'Call Mom', evidence: [] }],
+        ),
+        op({ chat_ref: 'C99', title: 'bogus chat ref', evidence: [1] }),
       ];
     },
   });
-  assert.deepEqual([first.created, first.skippedOps], [3, 1]);
+  assert.deepEqual([first.created, first.discardedBatches], [3, 0]);
+  assert.equal(first.skippedOps, prompts.length + 1, 'bogus ref (once per call) and the evidence-less Mom item are skipped');
+
+  // A stranger's chat is interpreted alone, never alongside other conversations.
+  const hostile = prompts.filter((p) => p.includes('IGNORE PREVIOUS INSTRUCTIONS'));
+  assert.equal(hostile.length, 1);
+  assert.equal(hostile[0].match(/^### C\d+/gm)!.length, 1, 'unknown sender is isolated');
 
   const store = Store.open();
   const ali = store.listItems({ person: 'Ali' })[0];
@@ -134,18 +151,26 @@ test('interpretation creates, updates and closes items without duplicates', asyn
     now: NOW,
     runner: async (prompt) => {
       assert.doesNotMatch(prompt, /Maya Chen/, 'Me replied last to Maya, so it is not re-checked');
-      assert.match(prompt, new RegExp(`${zara.id} \\[iou, open\\] Venmo Zara for tickets`));
-      const jordan = refFor(prompt, 'Jordan Lee');
-      return [
-        op({ chat_ref: jordan, kind: 'invite', title: "Jordan's birthday Nov 14", when_start: '2026-11-14', evidence: [6] }),
-        op({ chat_ref: refFor(prompt, 'Ali Rahman'), title: 'chill with ali', detail: 'After work', evidence: [18] }),
-        op({ op: 'done', item_id: zara.id, chat_ref: refFor(prompt, 'Zara Khan'), kind: 'iou', title: zara.title }),
-        op({ op: 'update', item_id: maya.id, chat_ref: jordan, kind: 'task', title: 'wrong chat' }),
-      ];
+      if (prompt.includes('Zara Khan')) assert.match(prompt, new RegExp(`${zara.id} \\[iou, open\\] Venmo Zara for tickets`));
+      const ops = present(
+        prompt,
+        ['Jordan Lee', { kind: 'invite', title: "Jordan's birthday Nov 14", when_start: '2026-11-14', evidence: [6] }],
+        ['Ali Rahman', { title: 'chill with ali', detail: 'After work', evidence: [18] }],
+        ['Zara Khan', { op: 'done', item_id: zara.id, kind: 'iou', title: zara.title, evidence: [13] }],
+      );
+      // Injection-style ops: closing an item without citing a new message, and reaching into another chat.
+      if (prompt.includes('Jordan Lee')) {
+        ops.push(op({ op: 'update', item_id: maya.id, chat_ref: refFor(prompt, 'Jordan Lee'), kind: 'task', title: 'wrong chat', evidence: [6] }));
+      }
+      if (prompt.includes('Ali Rahman')) {
+        ops.push(op({ op: 'done', item_id: ali.id, chat_ref: refFor(prompt, 'Ali Rahman'), title: ali.title, evidence: [16] }));
+      }
+      return ops;
     },
   });
-  assert.deepEqual([second.created, second.updated, second.closed, second.skippedOps], [1, 1, 1, 1]);
+  assert.deepEqual([second.created, second.updated, second.closed, second.skippedOps], [1, 1, 1, 2]);
   assert.equal(store.getItem(zara.id)!.status, 'done');
+  assert.equal(store.getItem(ali.id)!.status, 'open', 'done without a new message is rejected');
   assert.equal(store.getItem(maya.id)!.title, 'Send Maya the resume template', 'cross-chat update rejected');
   assert.equal(store.getItem(ali.id)!.evidence.length, 3, 'evidence accumulates on update');
   assert.equal(store.listItems({ person: 'Ali' }).length, 1, 'duplicate create became an update');
@@ -154,6 +179,18 @@ test('interpretation creates, updates and closes items without duplicates', asyn
   const third = await interpretNow({ config, now: NOW, runner: async () => assert.fail('should not be called') });
   assert.equal(third.chats, 0);
   store.close();
+});
+
+test('a batch where the model tries a tool is discarded without blocking other chats', async () => {
+  const { assertNoToolUse, ToolUseAttempt } = await import('../src/interpret/runners.ts');
+  const startup = '{"type":"item.completed","item":{"type":"error","message":"code mode will fail closed"}}';
+  const ok = [startup, '{"type":"turn.started"}', '{"type":"item.completed","item":{"type":"agent_message"}}', '{"type":"turn.completed"}'].join('\n');
+  assert.doesNotThrow(() => assertNoToolUse(ok));
+  for (const tool of ['mcp_tool_call', 'command_execution', 'web_search', 'file_change', 'error']) {
+    const bad = ['{"type":"turn.started"}', `{"type":"item.started","item":{"type":"${tool}"}}`].join('\n');
+    assert.throws(() => assertNoToolUse(bad), ToolUseAttempt, tool);
+  }
+  assert.throws(() => assertNoToolUse(startup), /never started/);
 });
 
 test('brief orders by urgency and includes ids', () => {
@@ -225,6 +262,25 @@ test('HTTP endpoint requires a local host header and the bearer token', async ()
   } finally {
     server.close();
   }
+});
+
+test('a hostile batch is dropped but the run completes and moves on', async () => {
+  const { ToolUseAttempt } = await import('../src/interpret/runners.ts');
+  const reset = Store.open();
+  reset.setMeta('last_rowid', '0');
+  reset.close();
+  const res = await interpretNow({
+    config: loadConfig(),
+    now: NOW,
+    runner: async (prompt) => {
+      if (prompt.includes('IGNORE PREVIOUS INSTRUCTIONS')) throw new ToolUseAttempt('tool call');
+      return [];
+    },
+  });
+  assert.equal(res.discardedBatches, 1);
+  const store = Store.open();
+  assert.ok(Number(store.getMeta('last_rowid')) >= 20, 'checkpoint advanced, so the message is not retried forever');
+  store.close();
 });
 
 test('state is private to the user', () => {

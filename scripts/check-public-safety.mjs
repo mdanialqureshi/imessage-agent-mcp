@@ -39,7 +39,8 @@ const PATTERNS = [
   ['Google OAuth secret', /\bGOCSPX-[A-Za-z0-9_-]{20,}/],
   ['GitLab token', /\bglpat-[A-Za-z0-9_-]{20,}/],
   ['Secret assignment', /(api[_-]?key|secret|password|passwd|token)\w*["']?\s*[:=]\s*['"]?[A-Za-z0-9_\-+/=.]{16,}/i],
-  ['Home path with username', /\/Users\/(?!<|\$|\{|you\b|me\b|example\b|USER\b|Shared\b)[A-Za-z0-9._-]+(\/|\b)/],
+  ['Home path with username', /\/(Users|home)\/(?!<|\$|\{|you\b|me\b|example\b|USER\b|Shared\b|runner\b)[A-Za-z0-9._-]+(\/|\b)/],
+  ['Encoded home path', /-Users-(?!you-|me-|example-)[A-Za-z0-9._]+-/],
 ];
 
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
@@ -64,11 +65,13 @@ for (const file of files) {
     problems.push(`${file}: binary file — commit only reviewed text files`);
     continue;
   }
-  const isScanner = path.resolve(file) === path.resolve('scripts/check-public-safety.mjs');
+  scanText(content, file);
+}
+
+function scanText(content, label) {
   content.split('\n').forEach((line, i) => {
-    const where = `${file}:${i + 1}`;
-    // The scanner's own regexes would match themselves; it is still checked for emails and phones.
-    if (!isScanner) for (const [name, re] of PATTERNS) if (re.test(line)) problems.push(`${where}: ${name}`);
+    const where = `${label}:${i + 1}`;
+    for (const [name, re] of PATTERNS) if (re.test(line)) problems.push(`${where}: ${name}`);
     for (const email of line.match(EMAIL) ?? []) {
       if (!ALLOWED_EMAIL_DOMAINS.test(email) && !ALLOWED_EMAILS.has(email.toLowerCase())) problems.push(`${where}: email address ${email}`);
     }
@@ -78,13 +81,14 @@ for (const file of files) {
   });
 }
 
-// Every commit must use a GitHub noreply identity so no personal email is published.
+// Every commit uses a GitHub noreply identity, and commit messages are scanned like files.
 if (checkAuthor) {
   for (const line of git('log', '--format=%h %ae %ce').split('\n').filter(Boolean)) {
     const [sha, author, committer] = line.split(' ');
     for (const email of [author, committer]) {
       if (!email.endsWith('@users.noreply.github.com') && !ALLOWED_EMAILS.has(email)) problems.push(`commit ${sha}: email ${email} is not a noreply address`);
     }
+    scanText(git('log', '-1', '--format=%B', sha), `commit ${sha} message`);
   }
 }
 

@@ -73,6 +73,16 @@ export function appleDateToJs(msSince2001: number | null): Date | null {
   return new Date(msSince2001 + APPLE_EPOCH_MS);
 }
 
+/** Removes snapshot copies left behind by a crash; live ones are at most a few seconds old. */
+export function sweepSnapshots(maxAgeMs = 10 * 60_000): void {
+  if (!fs.existsSync(paths.stateDir)) return;
+  for (const name of fs.readdirSync(paths.stateDir)) {
+    if (!name.startsWith('snapshot')) continue;
+    const dir = path.join(paths.stateDir, name);
+    if (Date.now() - fs.statSync(dir).mtimeMs > maxAgeMs) fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 export class ChatDb {
   private db: DatabaseSync;
   private columns: Set<string>;
@@ -103,19 +113,23 @@ export class ChatDb {
   /** A private copy of chat.db, deleted again on close(). */
   static openSnapshot(source = paths.chatDb): ChatDb {
     ensureStateDir();
+    sweepSnapshots();
     const snapshotDir = fs.mkdtempSync(path.join(paths.stateDir, 'snapshot-'));
-    const target = path.join(snapshotDir, 'chat.db');
-    for (const suffix of ['', '-wal', '-shm']) {
-      const from = source + suffix;
-      const to = target + suffix;
-      if (fs.existsSync(from)) {
-        fs.copyFileSync(from, to);
-        fs.chmodSync(to, 0o600);
+    try {
+      const target = path.join(snapshotDir, 'chat.db');
+      for (const suffix of ['', '-wal', '-shm']) {
+        if (fs.existsSync(source + suffix)) {
+          fs.copyFileSync(source + suffix, target + suffix);
+          fs.chmodSync(target + suffix, 0o600);
+        }
       }
+      const db = new ChatDb(new DatabaseSync(target));
+      db.cleanupDir = snapshotDir;
+      return db;
+    } catch (err) {
+      fs.rmSync(snapshotDir, { recursive: true, force: true });
+      throw err;
     }
-    const db = new ChatDb(new DatabaseSync(target));
-    db.cleanupDir = snapshotDir;
-    return db;
   }
 
   constructor(db: DatabaseSync) {

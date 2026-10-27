@@ -54,14 +54,21 @@ export class Conversations {
     });
   }
 
+  /** True when anyone in the chat isn't a saved contact. */
+  hasUnknownSender(chat: Chat): boolean {
+    const others = chat.handles.length ? chat.handles : [chat.identifier];
+    return others.some((h) => this.contacts.name(h) === null);
+  }
+
+  /** Group names are set by other people, so they get the same one-line treatment as messages. */
   chatLabel(chat: Chat): string {
-    if (chat.displayName) return chat.displayName;
-    const names = chat.handles.map((h) => this.contacts.label(h));
+    if (chat.displayName) return displayText(chat.displayName);
+    const names = chat.handles.map((h) => displayText(this.contacts.label(h)));
     return names.join(', ') || chat.identifier;
   }
 
   sender(m: Message): string {
-    return m.fromMe ? 'Me' : this.contacts.label(m.handle);
+    return m.fromMe ? 'Me' : displayText(this.contacts.label(m.handle));
   }
 
   /** Chats with new messages, each with earlier context so replies make sense. */
@@ -106,7 +113,7 @@ export class Conversations {
   render(w: Window): string {
     const all = [...w.context, ...w.fresh];
     const byGuid = new Map(all.map((m) => [m.guid, m]));
-    const people = w.chat.handles.map((h) => this.contacts.label(h)).join(', ');
+    const people = w.chat.handles.map((h) => displayText(this.contacts.label(h))).join(', ');
     const lines = [
       `### ${w.ref} — ${w.label}${w.chat.isGroup ? ` (group: ${people})` : ''}`,
       w.reason === 'awaiting_reply' ? '(included because their last message has not been answered)' : '',
@@ -125,7 +132,7 @@ export class Conversations {
       const target = byGuid.get(m.reaction.targetGuid) ?? this.db.messageByGuid(m.reaction.targetGuid);
       const ref = target ? (byGuid.has(target.guid) ? `#${target.rowid}` : `"${clip(displayText(target.text), 80)}"`) : 'a message';
       const verb = m.reaction.removed ? 'removed reaction' : 'reacted';
-      return `#${m.rowid} ${when} ${who} ${verb} ${m.reaction.emoji} to ${ref}`;
+      return `#${m.rowid} ${when} ${who} ${verb} ${displayText(m.reaction.emoji)} to ${ref}`;
     }
     let body = displayText(m.text);
     if (m.unsent) body = '[unsent a message]';

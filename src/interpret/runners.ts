@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -52,7 +52,13 @@ function parseOps(text: string): RawOp[] {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   if (start < 0 || end < start) throw new Error('Interpreter returned no JSON object');
-  const parsed = JSON.parse(text.slice(start, end + 1));
+  let parsed: { ops?: unknown };
+  try {
+    parsed = JSON.parse(text.slice(start, end + 1));
+  } catch {
+    // JSON.parse errors quote the input, which can be message text.
+    throw new Error('Interpreter returned invalid JSON');
+  }
   if (!Array.isArray(parsed.ops)) throw new Error('Interpreter JSON has no ops array');
   return parsed.ops as RawOp[];
 }
@@ -64,16 +70,47 @@ function withScratch<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 }
 
 /**
- * Message text is attacker-controlled, so the interpreter must be a pure text-in/JSON-out
- * call: no shell, no MCP servers, no user config or hooks, no session files. The service
- * holds Full Disk Access and children inherit it, so a shell here could read anything.
+ * Codex features that expose tools: shell/exec, ChatGPT connectors (apps, plugins), code
+ * mode, sub-agents, browser/computer use, memories, hooks. Always disabled, even if
+ * `codex features list` can't be read.
  */
-export function codexArgs(dir: string, schemaFile: string, outFile: string, model: string | null): string[] {
+export const CODEX_TOOL_FEATURES = [
+  'apps', 'plugins', 'remote_plugin', 'plugin_sharing', 'code_mode_host', 'shell_tool', 'unified_exec',
+  'unified_exec_tty', 'view_image', 'multi_agent', 'image_generation', 'memories', 'goals', 'browser_use',
+  'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'in_app_browser', 'tool_suggest',
+  'skill_search', 'skill_mcp_dependency_install', 'hooks', 'sleep_tool',
+];
+
+let codexFeatures: string[] | null = null;
+
+/**
+ * Every feature enabled in the installed Codex, so tools added by future versions are
+ * switched off too. Text-in/JSON-out needs none of them.
+ */
+export function enabledCodexFeatures(codexBin = bin('codex')): string[] {
+  if (!codexFeatures) {
+    const out = execFileSync(codexBin, ['features', 'list'], { encoding: 'utf8' });
+    codexFeatures = out
+      .split('\n')
+      .map((l) => l.trim().split(/\s+/))
+      .filter((cols) => cols.length >= 2 && cols.at(-1) === 'true')
+      .map((cols) => cols[0]);
+  }
+  return codexFeatures;
+}
+
+/**
+ * Message text is attacker-controlled, so the interpreter must be a pure text-in/JSON-out
+ * call: no shell, no connectors or MCP servers, no user config or hooks, no session files.
+ * The service holds Full Disk Access and children inherit it.
+ */
+export function codexArgs(dir: string, schemaFile: string, outFile: string, model: string | null, features: string[] = []): string[] {
+  const disabled = [...new Set([...CODEX_TOOL_FEATURES, ...features])];
   const args = [
     'exec', '--skip-git-repo-check', '--ephemeral', '--ignore-user-config', '--ignore-rules',
-    '--disable', 'shell_tool', '--disable', 'unified_exec', '--disable', 'view_image',
+    ...disabled.flatMap((f) => ['--disable', f]),
     '-c', 'web_search="disabled"',
-    '--sandbox', 'read-only', '--color', 'never',
+    '--sandbox', 'read-only', '--color', 'never', '--json',
     '--output-schema', schemaFile, '-o', outFile, '-C', dir,
   ];
   if (model) args.push('-m', model);
@@ -96,13 +133,45 @@ function bin(name: 'codex' | 'claude'): string {
   return process.env[`IMESSAGE_AGENT_${name.toUpperCase()}_BIN`] || name;
 }
 
+/** The model tried to use a tool, which only an injected instruction would cause. */
+export class ToolUseAttempt extends Error {}
+
+/** Event items a pure text answer produces. Anything else means the model tried a tool. */
+const CODEX_TEXT_ITEMS = new Set(['agent_message', 'reasoning']);
+
+/**
+ * Fails closed: if the model attempted any tool call during its turn (which only an
+ * injected instruction would cause), the whole batch's output is discarded. Items before
+ * the turn starts are startup notices, e.g. "code mode will fail closed".
+ */
+export function assertNoToolUse(jsonl: string): void {
+  let inTurn = false;
+  for (const line of jsonl.split('\n')) {
+    if (!line.trim()) continue;
+    let event: { type?: string; item?: { type?: string } };
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (event.type === 'turn.started') inTurn = true;
+    if (event.type === 'error' || event.type === 'turn.failed') throw new Error(`Interpreter failed (${event.type})`);
+    const itemType = event.item?.type;
+    if (inTurn && itemType && !CODEX_TEXT_ITEMS.has(itemType)) {
+      throw new ToolUseAttempt(`Interpreter attempted a tool call (${itemType}); output discarded`);
+    }
+  }
+  if (!inTurn) throw new Error('Interpreter never started a turn');
+}
+
 /** Codex CLI signed in with a ChatGPT plan: `codex exec` with a strict output schema. */
 async function codex(prompt: string, config: Config): Promise<RawOp[]> {
   return withScratch(async (dir) => {
     const schemaFile = path.join(dir, 'schema.json');
     const outFile = path.join(dir, 'out.json');
     fs.writeFileSync(schemaFile, JSON.stringify(OUTPUT_SCHEMA));
-    await run(bin('codex'), codexArgs(dir, schemaFile, outFile, config.model), prompt, dir);
+    const events = await run(bin('codex'), codexArgs(dir, schemaFile, outFile, config.model, enabledCodexFeatures()), prompt, dir);
+    assertNoToolUse(events);
     return parseOps(fs.readFileSync(outFile, 'utf8'));
   });
 }

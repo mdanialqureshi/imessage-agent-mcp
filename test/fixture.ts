@@ -17,7 +17,8 @@ export const PEOPLE = {
   mom: { name: 'Mom', handle: '+12125550105' },
   zara: { name: 'Zara Khan', handle: '+12125550106' },
   chris: { name: 'Chris Park', handle: 'chris@example.com' },
-  eve: { name: 'Eve Mallory', handle: '+12125550107' },
+  // Not a saved contact: an unknown sender.
+  eve: { name: null, handle: '+12125550107' },
   bank: { name: null, handle: '72345' },
 };
 
