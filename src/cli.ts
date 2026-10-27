@@ -11,7 +11,7 @@ import { interpretNow } from './interpret/run.ts';
 import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
 import { Conversations } from './messages/conversations.ts';
-import { compileReader, READER_BUILD, READER_LABEL, readerBinary, readerStatus } from './messages/mirror.ts';
+import { compileReader, READER_BUILD, READER_LABEL, readerBinary, readerStatus, STALE_MS } from './messages/mirror.ts';
 import { APPS, which } from './apps.ts';
 import { bridge, callTool, type ServiceHealth, serviceHealth } from './bridge.ts';
 import { serveSocket, socketPath } from './server.ts';
@@ -94,7 +94,7 @@ async function doctor(): Promise<void> {
       if (!health.canReadMessages) {
         const status = readerStatus();
         const log = path.join(paths.stateDir, 'logs/reader.log');
-        throw new Error(status?.ok
+        throw new Error(status?.ok && Date.now() - status.at >= STALE_MS
           ? `the reader isn't answering, so the service's copy of Messages is out of date; see ${log}`
           : status?.error === 'EFAIL'
             ? `the reader couldn't copy Messages; see ${log}`

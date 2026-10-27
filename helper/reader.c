@@ -12,7 +12,8 @@
 //   everything relative to that handle. It never follows a link in the folder or opens one of
 //   its files with SQLite. It only modifies a file after checking it's its own; leftovers are
 //   deleted without following links.
-// - It holds its read lock on the live Messages database only while cloning, and a deadline
+// - It holds its read lock on the live Messages database only while cloning (or copying, off
+//   APFS), writes only through folders on the home filesystem, and a deadline
 //   (alarm) ends it if it stalls. (A process that can pause it, e.g. with SIGSTOP, can still
 //   delay it; such a process could pause Messages itself just as well.)
 //
@@ -40,14 +41,25 @@
 
 static const char *AB = "AddressBook-v22.abcddb";
 static int state = -1;
+static dev_t home_dev; // Every folder we write through must be on the home filesystem.
+
 
 static int join(char *out, const char *a, const char *b) {
   return snprintf(out, PATH_MAX, "%s/%s", a, b) < PATH_MAX ? 0 : ENAMETOOLONG;
 }
 
-/** dir/name as a directory handle, refusing a link at name. */
+/**
+ * dir/name as a directory handle, refusing a link at name, or a different filesystem there
+ * (something mounted over it could stall our writes while we hold the live database).
+ */
 static int open_dir(int dir, const char *name) {
-  return openat(dir, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  int fd = openat(dir, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  struct stat st;
+  if (fd >= 0 && (fstat(fd, &st) < 0 || st.st_dev != home_dev)) {
+    close(fd);
+    return -1;
+  }
+  return fd;
 }
 
 /** Whether fd is a directory owned by us that no one else can open. */
@@ -141,7 +153,7 @@ static int copy_db(const char *src, int dir, const char *name) {
   int wal = access(src_wal, F_OK) == 0;
   int err = !held && wal ? EFAULT : copy_file(src, dir, name);
   if (!err && wal) err = copy_file(src_wal, dir, dst_wal);
-  // Release the live database before touching anything in the state folder again.
+  // Release the live database before checking and changing the copies.
   if (held) sqlite3_exec(live, "COMMIT;", NULL, NULL, NULL);
   sqlite3_close(live);
   if (!err) err = make_private(dir, name);
@@ -194,6 +206,9 @@ int main(void) {
   // Walk to the state folder without following links, so it can't be redirected.
   const char *parts[] = {"Library", "Application Support", "imessage-agent-mcp"};
   int fd = open(home, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  struct stat st_home;
+  if (fd < 0 || fstat(fd, &st_home) < 0) return 1;
+  home_dev = st_home.st_dev;
   for (size_t i = 0; i < sizeof parts / sizeof *parts && fd >= 0; i++) {
     int next = open_dir(fd, parts[i]);
     close(fd);
@@ -207,12 +222,6 @@ int main(void) {
 
   char tmp[] = "mirror-new-XXXXXX";
   int out = mkdtempat_np(state, tmp) ? open_dir(state, tmp) : -1;
-  // Same filesystem as the state folder, so nothing can be mounted over the new folder.
-  struct stat st_state, st_out;
-  if (out >= 0 && (fstat(state, &st_state) < 0 || fstat(out, &st_out) < 0 || st_state.st_dev != st_out.st_dev)) {
-    close(out);
-    out = -1;
-  }
   if (!is_private_dir(out)) {
     if (out >= 0) close(out);
     remove_tree(state, tmp, 0);

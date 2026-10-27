@@ -57,7 +57,7 @@ export const NEEDS_ACCESS =
   '(run `node src/cli.ts doctor` on the Mac).';
 
 /** A copy older than this means the reader has stopped answering, so it isn't used. */
-const STALE_MS = 10 * 60_000;
+export const STALE_MS = 10 * 60_000;
 
 /** Why the copy can't be used, for agents; null when it can. */
 export function mirrorProblem(status: ReaderStatus | null): string | null {
