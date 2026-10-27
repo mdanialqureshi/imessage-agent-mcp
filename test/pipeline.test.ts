@@ -308,16 +308,31 @@ test('service listens only on a private Unix socket, and the bridge relays MCP t
 
   // A broken or stuck service is always an error, never a silent empty success or a hang.
   const http = await import('node:http');
-  const bad = path.join(path.dirname(socketPath()), 'bad.sock');
-  for (const body of ['', 'null', '[null]', '{"jsonrpc":"2.0","id":99,"result":{}}', '{"jsonrpc":"2.0","id":1,"result":{"tools":5}}', 'stall']) {
+  const init1 = '{"jsonrpc":"2.0","id":1,"result":{}}';
+  const cases: [string, string | undefined][] = [
+    ['', undefined], ['null', undefined], ['[null]', undefined], ['{"jsonrpc":"2.0","id":99,"result":{}}', undefined],
+    ['{"jsonrpc":"2.0","id":1,"result":{"tools":5}}', undefined], ['stall', undefined], ['trickle', undefined], ['cut', undefined],
+    [`[${init1},${init1}]`, undefined], [`[{"jsonrpc":"2.0","id":1,"error":{"message":"boom"}},${init1}]`, undefined],
+    [`${init1}|{"jsonrpc":"2.0","id":2,"result":{}}`, 'get_status'],
+  ];
+  for (const [i, [body, tool]] of cases.entries()) {
+    const bad = path.join(path.dirname(socketPath()), `bad-${i}.sock`);
+    let n = 0;
     const fake = http.createServer((req, res) => {
       req.resume();
-      if (body !== 'stall') res.end(body);
+      if (body === 'stall') return;
+      if (body === 'trickle') return void setInterval(() => res.write(' '), 50).unref();
+      if (body === 'cut') return void (res.writeHead(200, { 'content-length': '100' }), res.write('{"jsonrpc"'), setTimeout(() => res.destroy(), 20));
+      const parts = body.split('|');
+      res.end(parts[Math.min(n++, parts.length - 1)]);
     });
     await new Promise<void>((r) => fake.listen(bad, r));
     try {
-      const res = await callTool(bad, undefined, {}, 300);
+      const started = Date.now();
+      const res = await callTool(bad, tool, {}, 300);
       assert.equal(res.isError, true, `service reply ${JSON.stringify(body)} is an error`);
+      assert.ok(Date.now() - started < 1500, `service reply ${JSON.stringify(body)} doesn't hang`);
+      if (body.includes('boom')) assert.equal(res.text, 'boom', 'the real error is shown');
     } finally {
       fake.closeAllConnections();
       await new Promise((r) => fake.close(r));

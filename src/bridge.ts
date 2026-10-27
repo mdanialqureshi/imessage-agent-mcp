@@ -35,16 +35,29 @@ export function bridge(
 
   const forward = (msg: JsonRpc, body: string) =>
     new Promise<void>((resolve) => {
-      const fail = (message: string) => {
-        if (msg.id !== undefined && msg.method) write({ jsonrpc: '2.0', id: msg.id, error: { code: -32603, message } });
+      // Settles exactly once: on a full reply, an error, a cut-off reply, or the deadline.
+      let settled = false;
+      const settle = () => {
+        if (settled) return false;
+        settled = true;
+        clearTimeout(deadline);
         resolve();
+        return true;
       };
+      const fail = (message: string) => {
+        if (!settle()) return;
+        if (msg.id !== undefined && msg.method) write({ jsonrpc: '2.0', id: msg.id, error: { code: -32603, message } });
+      };
+      // A total deadline, not an idle timeout, so a service trickling bytes can't hold a request open.
+      const deadline = setTimeout(() => {
+        fail("imessage-agent service didn't answer in time");
+        req.destroy();
+      }, timeoutMs);
       const req = http.request(
         {
           socketPath: sock,
           path: '/mcp',
           method: 'POST',
-          timeout: timeoutMs,
           headers: {
             host: 'localhost',
             'content-type': 'application/json',
@@ -56,30 +69,29 @@ export function bridge(
           let data = '';
           res.setEncoding('utf8');
           res.on('data', (d) => (data += d));
+          res.on('error', () => {});
+          res.on('close', () => {
+            if (!res.complete) fail('imessage-agent service closed the connection mid-reply');
+          });
           res.on('end', () => {
-            if (!data.trim()) return resolve(); // 202 for notifications.
+            if (settled) return;
+            if (!data.trim()) return void settle(); // 202 for notifications.
             let reply: JsonRpc | JsonRpc[];
             try {
               reply = JSON.parse(data);
             } catch {
               return fail('imessage-agent service returned an unreadable response');
             }
+            settle();
             for (const r of Array.isArray(reply) ? reply : [reply]) {
               if (!r || typeof r !== 'object') continue;
               if (msg.method === 'initialize' && r.result?.protocolVersion) protocolVersion = r.result.protocolVersion;
               write(r);
             }
-            resolve();
           });
         },
       );
       req.on('error', () => fail(SERVICE_DOWN));
-      req.on('timeout', () => {
-        req.removeAllListeners('error');
-        req.on('error', () => {});
-        req.destroy();
-        fail("imessage-agent service didn't answer in time");
-      });
       req.end(body);
     });
 
@@ -134,10 +146,13 @@ export function callTool(
 ): Promise<{ text: string; isError: boolean }> {
   const input = new PassThrough();
   const output = new PassThrough();
-  const send = (msg: unknown) => input.write(JSON.stringify(msg) + '\n');
+  const send = (msg: unknown) => {
+    if (!input.writableEnded) input.write(JSON.stringify(msg) + '\n');
+  };
   bridge(sock, input, output, timeoutMs).then(() => output.end());
   return new Promise((resolve) => {
     let settled = false;
+    let initialized = false;
     const finish = (text: string, isError: boolean) => {
       if (settled) return;
       settled = true;
@@ -148,11 +163,14 @@ export function callTool(
     const timer = setTimeout(() => finish("imessage-agent service didn't answer in time", true), timeoutMs);
     const rl = readline.createInterface({ input: output });
     rl.on('line', (line) => {
+      if (settled) return;
       try {
         const reply = JSON.parse(line);
         if (!isObject(reply)) return finish(NO_REPLY, true);
         if (reply.error) return finish(String(reply.error.message ?? 'Unknown error'), true);
         if (reply.id === 1) {
+          if (initialized) return finish(NO_REPLY, true);
+          initialized = true;
           send({ jsonrpc: '2.0', method: 'notifications/initialized' });
           send(name ? { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } } : { jsonrpc: '2.0', id: 2, method: 'tools/list' });
           return input.end();
@@ -163,8 +181,10 @@ export function callTool(
           const tools = (Array.isArray(result.tools) ? result.tools : []).filter(isObject);
           return finish(tools.map((t) => `${signature(t)}: ${t.description ?? ''}`).join('\n') || NO_REPLY, !tools.length);
         }
-        const content = (Array.isArray(result.content) ? result.content : []).filter(isObject);
-        finish(`${UNTRUSTED_NOTE}\n${content.map((c) => (typeof c.text === 'string' ? c.text : '')).join('\n')}`, Boolean(result.isError));
+        const texts = (Array.isArray(result.content) ? result.content : []).filter(isObject).map((c) => (typeof c.text === 'string' ? c.text : ''));
+        // Every tool answers with text, even "No matching items.", so no text means something went wrong.
+        if (!texts.some((t) => t.trim())) return finish(NO_REPLY, true);
+        finish(`${UNTRUSTED_NOTE}\n${texts.join('\n')}`, Boolean(result.isError));
       } catch {
         finish(NO_REPLY, true);
       }
