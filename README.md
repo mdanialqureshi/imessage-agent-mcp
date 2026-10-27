@@ -6,12 +6,12 @@ You reply "let's chill" to "what are you doing on tuesday?" and never put it in 
 
 This runs entirely on your Mac. It reads Messages read-only, understands the conversations, and keeps a list of plans, calls, tasks, follow-ups, things to consider, reminders, replies you owe, invites, what others owe you, IOUs, check-ins, facts to remember and recommendations.
 
-Your agent checks the list on your schedule, tells you in its own chat, and asks before adding anything to your calendar.
+Your agent checks the list on your schedule and tells you in its own chat. If you ask it to, it checks with you before adding anything to your calendar.
 
 ## How it works
 
 ```
-  Dot or Claude, on your phone or the web
+  Dot or Claude, on your phone or the web*
                    │
   ChatGPT or Claude desktop app, on your Mac        ← the only way in
                    │ launches
@@ -25,6 +25,8 @@ Your agent checks the list on your schedule, tells you in its own chat, and asks
 - **The reader** is a small C program and the only part with Full Disk Access. It copies Messages and Contacts into a private folder, and does nothing else.
 - **The background service** reads that copy. Every 2 hours it interprets new messages using your Claude or ChatGPT subscription (no API keys), and it keeps the list.
 - **The bridge** is what your apps launch. It just relays requests to the service.
+
+\*Verified so far: Claude Code, Codex and the Claude desktop app on the Mac, and Dot through the `call` command. Not yet verified: Dot seeing the tools natively, and Claude from your phone. See the [roadmap](docs/roadmap.md).
 
 New conversations go to Anthropic or OpenAI (whichever interpreter you choose), minus codes, short codes and contacts you mark private. Tool results go to the agent that asked. Nothing else leaves your Mac. Details: [docs/security.md](docs/security.md).
 
@@ -69,7 +71,7 @@ macOS makes you turn this on yourself. Give it to the reader only, never to `nod
 3. If `node` is in the list from an older version of this project, switch it off.
 4. Check that `node src/cli.ts doctor` shows ✅ Full Disk Access.
 
-If an update rebuilds the reader, macOS treats it as a new program, so add it again and remove the old entry. `doctor` tells you when this is needed.
+If an update rebuilds the reader, macOS treats it as a new program, so add it again and remove the old entry. When this happens, `doctor` shows ❌ Full Disk Access.
 
 ### Updating
 
@@ -82,7 +84,7 @@ node src/cli.ts install-service    # restarts the service; rebuilds the reader o
 
 Restart the desktop apps after `setup`. Your Mac must be on and awake, with the app running, for agents on your phone to reach it.
 
-- **Dot:** in the ChatGPT desktop app, open your Dot's profile → **Computers** → **Allow access**. Then tell your Dot: *"For my texts, use the imessage tools on my Mac. If they aren't in your tool list, run `node <repo>/src/cli.ts call` to list them and `node <repo>/src/cli.ts call <tool> '<json args>'` to use one."* `doctor` prints that command with your real path. Native tools for Dot aren't verified yet, but `call` already works. If Dot asks for approval, approve only that command.
+- **Dot:** in the ChatGPT desktop app, open your Dot's profile → **Computers** → **Allow access**. Then tell your Dot: *"For my texts, use the imessage tools on my Mac. If they aren't in your tool list, run `node <repo>/src/cli.ts call` to list them and `node <repo>/src/cli.ts call <tool> '<json args>'` to use one."* `doctor` prints that command with your real path. Dot doesn't see the tools natively yet ([roadmap](docs/roadmap.md)), but `call` already works. If Dot asks for approval, approve only that command.
 - **Claude desktop:** ask *"Use the imessage tools: what do I owe people?"*
 - **Claude Code, Codex, Cursor:** the tools are available after `setup`.
 - **Any other MCP app:** add a stdio server that runs `node <repo>/src/cli.ts connect`. See [docs/agent-setup.md](docs/agent-setup.md).
@@ -133,14 +135,14 @@ node src/cli.ts use codex     # or: use claude
 ## Limitations
 
 - Agents on your phone can only reach it while your Mac is on and awake.
-- It works best with your home folder on APFS, the macOS default.
+- Your home folder should be on APFS (the macOS default). Elsewhere the reader makes full copies, and a very large history may not finish within its 2-minute limit.
 - Attachments and images aren't read yet.
 - The model can be wrong. `node src/cli.ts brief --all` shows low-confidence items, and `dismissed` rejects false ones.
 
 ## Uninstall
 
 ```sh
-node src/cli.ts uninstall                # removes the service, the reader and its copy; keeps your items
+node src/cli.ts uninstall                # disconnects your apps, removes the service, the reader and its copy; keeps your items
 node src/cli.ts uninstall --delete-data  # also deletes your items and logs
 ```
 

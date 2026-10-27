@@ -16,7 +16,7 @@ Verification codes, short-code senders (banks, 2FA, deliveries) and anyone in `p
 
 - The service listens on a Unix socket (`0600`, inside a `0700` folder), never on a network port, not even localhost. There's no tunnel, relay or hosted component.
 - Cloud agents reach your Mac only through desktop apps you run and sign in to yourself (the ChatGPT or Claude desktop app). You can turn that off there, e.g. **Revoke access** on your Dot's profile.
-- State lives in `~/Library/Application Support/imessage-agent-mcp/`: the item list, short evidence quotes, run history, and the reader's copy of Messages. Every file is `0600`.
+- State lives in `~/Library/Application Support/imessage-agent-mcp/`: the item list, short evidence quotes, run history, and the reader's copy of Messages. Every data file is `0600`.
 
 ## Full Disk Access: only the reader
 
@@ -26,7 +26,7 @@ The reader does one thing: copy the Messages and Contacts databases into the pri
 
 - It takes no arguments and gets its home folder from the system, not the environment.
 - It's signed with Apple's hardened runtime, so injected libraries (`DYLD_INSERT_LIBRARIES`) and debuggers can't run code inside it.
-- It reaches the private folder without following links, and refuses it if any part of the way is a link, on another drive, owned by someone else or open to other users.
+- It reaches the private folder without following links. It refuses the folder if any part of the way is a link or on another drive, or if the folder itself is owned by someone else or open to other users.
 - Inside that folder it never follows a link, never opens a file with SQLite, and only changes a file after checking it's its own.
 - It holds a read lock on the live Messages database only while copying, so the copy is consistent. A two-minute deadline ends it if it stalls.
 - It's read-only: nothing is ever sent, edited or deleted.

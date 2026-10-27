@@ -121,7 +121,7 @@ export function enabledCodexFeatures(codexBin = bin('codex')): string[] {
 /**
  * Message text is attacker-controlled, so the interpreter must be a pure text-in/JSON-out
  * call: no shell, no connectors or MCP servers, no user config or hooks, no session files.
- * The service holds Full Disk Access and children inherit it.
+ * The service reads the reader's private copy of Messages, which the interpreter must not reach.
  */
 export function codexArgs(dir: string, schemaFile: string, outFile: string, model: string | null, features: string[] = []): string[] {
   const disabled = [...new Set([...CODEX_TOOL_FEATURES, ...features])];
