@@ -360,8 +360,8 @@ async function main(): Promise<void> {
       }
       if (typeof args !== 'object' || args === null || Array.isArray(args)) throw new Error(usage);
       const res = await callTool(socketPath(), rest[0], args as Record<string, unknown>);
-      console.log(res.text);
-      if (res.isError) process.exitCode = 1;
+      // Exit as soon as the answer is out; agents wait on the process, not the output.
+      process.stdout.write(res.text + '\n', () => process.exit(res.isError ? 1 : 0));
       return;
     }
     case 'uninstall':

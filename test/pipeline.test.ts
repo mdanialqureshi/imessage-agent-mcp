@@ -314,6 +314,8 @@ test('service listens only on a private Unix socket, and the bridge relays MCP t
     ['{"jsonrpc":"2.0","id":1,"result":{"tools":5}}', undefined], ['stall', undefined], ['trickle', undefined], ['cut', undefined],
     [`[${init1},${init1}]`, undefined], [`[{"jsonrpc":"2.0","id":1,"error":{"message":"boom"}},${init1}]`, undefined],
     [`${init1}|{"jsonrpc":"2.0","id":2,"result":{}}`, 'get_status'],
+    ['{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"early"}]}}', 'get_status'],
+    [`${init1}|{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"from a notification"}]}}|{"jsonrpc":"2.0","id":9,"result":{}}`, 'get_status'],
   ];
   for (const [i, [body, tool]] of cases.entries()) {
     const bad = path.join(path.dirname(socketPath()), `bad-${i}.sock`);

@@ -82,9 +82,12 @@ export function bridge(
             } catch {
               return fail('imessage-agent service returned an unreadable response');
             }
+            // Answer each request id this message carried exactly once; notifications get nothing.
+            const wanted = new Set((Array.isArray(msg) ? msg : [msg]).filter((m) => m?.method && m.id !== undefined).map((m) => m.id));
+            const replies = (Array.isArray(reply) ? reply : [reply]).filter((r) => r && typeof r === 'object' && wanted.delete(r.id));
+            if (!replies.length && wanted.size) return fail("imessage-agent service didn't give a usable reply");
             settle();
-            for (const r of Array.isArray(reply) ? reply : [reply]) {
-              if (!r || typeof r !== 'object') continue;
+            for (const r of replies) {
               if (msg.method === 'initialize' && r.result?.protocolVersion) protocolVersion = r.result.protocolVersion;
               write(r);
             }
@@ -175,7 +178,7 @@ export function callTool(
           send(name ? { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } } : { jsonrpc: '2.0', id: 2, method: 'tools/list' });
           return input.end();
         }
-        if (reply.id !== 2 || !isObject(reply.result)) return finish(NO_REPLY, true);
+        if (reply.id !== 2 || !initialized || !isObject(reply.result)) return finish(NO_REPLY, true);
         const result = reply.result;
         if (!name) {
           const tools = (Array.isArray(result.tools) ? result.tools : []).filter(isObject);
