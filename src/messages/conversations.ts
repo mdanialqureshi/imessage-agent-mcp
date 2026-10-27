@@ -1,5 +1,6 @@
 import type { Config } from '../config.ts';
 import type { Chat, ChatDb, Message } from './chatdb.ts';
+import { clip, oneLine } from '../text.ts';
 import { type Contacts, handleKey, isShortCode } from './contacts.ts';
 
 export interface Window {
@@ -12,6 +13,10 @@ export interface Window {
   /** Why this chat is included: new messages, or an unanswered message ageing past the threshold. */
   reason: 'new_messages' | 'awaiting_reply';
 }
+
+/** Per-message and per-window caps, so one huge message can't break interpretation. */
+const MAX_MESSAGE_CHARS = 2000;
+const MAX_WINDOW_CHARS = 40_000;
 
 const VERIFICATION_CODE = /\b(code|passcode|verification|verify|OTP|one[- ]time|2FA|security)\b/i;
 
@@ -26,7 +31,7 @@ export function isFilteredText(text: string): boolean {
 export function displayText(text: string | null): string {
   if (!text) return '';
   if (isFilteredText(text)) return '[filtered: verification code]';
-  return text.replace(/\s*[\r\n\u2028\u2029]+\s*/g, ' ⏎ ');
+  return clip(oneLine(text, ' ⏎ '), MAX_MESSAGE_CHARS);
 }
 
 export class Conversations {
@@ -118,10 +123,13 @@ export class Conversations {
       `### ${w.ref} — ${w.label}${w.chat.isGroup ? ` (group: ${people})` : ''}`,
       w.reason === 'awaiting_reply' ? '(included because their last message has not been answered)' : '',
     ].filter(Boolean);
-    if (w.context.length) lines.push('-- earlier context --');
-    for (const m of w.context) lines.push(this.line(m, byGuid));
-    lines.push(w.reason === 'awaiting_reply' ? '-- latest message --' : '-- new since last check --');
-    for (const m of w.fresh) lines.push(this.line(m, byGuid));
+    let context = w.context.map((m) => this.line(m, byGuid));
+    let fresh = w.fresh.map((m) => this.line(m, byGuid));
+    const size = () => [...context, ...fresh].reduce((n, l) => n + l.length + 1, 0);
+    while (context.length && size() > MAX_WINDOW_CHARS) context = context.slice(1);
+    while (fresh.length > 1 && size() > MAX_WINDOW_CHARS) fresh = fresh.slice(1);
+    if (context.length) lines.push('-- earlier context --', ...context);
+    lines.push(w.reason === 'awaiting_reply' ? '-- latest message --' : '-- new since last check --', ...fresh);
     return lines.join('\n');
   }
 
@@ -129,7 +137,8 @@ export class Conversations {
     const who = this.sender(m);
     const when = formatTime(m.date);
     if (m.reaction) {
-      const target = byGuid.get(m.reaction.targetGuid) ?? this.db.messageByGuid(m.reaction.targetGuid);
+      // Only quote targets from this chat: the sender controls the GUID, and another chat may be private.
+      const target = byGuid.get(m.reaction.targetGuid) ?? this.db.messageByGuid(m.reaction.targetGuid, m.chatId);
       const ref = target ? (byGuid.has(target.guid) ? `#${target.rowid}` : `"${clip(displayText(target.text), 80)}"`) : 'a message';
       const verb = m.reaction.removed ? 'removed reaction' : 'reacted';
       return `#${m.rowid} ${when} ${who} ${verb} ${displayText(m.reaction.emoji)} to ${ref}`;
@@ -151,8 +160,4 @@ export function formatTime(d: Date): string {
     hour: 'numeric',
     minute: '2-digit',
   });
-}
-
-function clip(text: string, max: number): string {
-  return text.length > max ? text.slice(0, max - 1) + '…' : text;
 }

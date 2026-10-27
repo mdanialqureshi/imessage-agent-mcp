@@ -1,11 +1,10 @@
 import type { Item, Store } from './store.ts';
+import { oneLine } from './text.ts';
 
 const ACTIVE = ['open'];
 const SAVED_KINDS = new Set(['fact', 'recommendation']);
 const LOW_CONFIDENCE = 0.5;
 
-/** Item text is model output derived from untrusted messages; it must not add lines. */
-const oneLine = (s: string) => s.replace(/\s*[\r\n\u2028\u2029]+\s*/g, ' ');
 
 function localDate(d: Date): string {
   return d.toLocaleDateString('en-CA');
@@ -26,14 +25,15 @@ function whenLabel(i: Item): string {
 
 export function formatItem(i: Item, opts: { since?: string; evidence?: number } = {}): string {
   const isNew = opts.since && i.createdAt > opts.since ? '🆕 ' : '';
-  const meta = [i.kind, whenLabel(i), i.strength !== 'firm' ? i.strength : '', `${Math.round(i.confidence * 100)}%`]
+  // Item text is model output derived from untrusted messages; none of it may add lines.
+  const meta = [i.kind, whenLabel(i), i.strength !== 'firm' ? oneLine(i.strength) : '', `${Math.round(i.confidence * 100)}%`]
     .filter(Boolean)
     .join(' · ');
   const lines = [`- ${isNew}**${oneLine(i.title)}** — ${oneLine(i.chatLabel)} · ${meta} · \`${i.id}\``];
   if (i.detail) lines.push(`  ${oneLine(i.detail)}`);
   if (i.missingDetails.length) lines.push(`  Missing: ${oneLine(i.missingDetails.join(', '))}`);
   for (const e of i.evidence.slice(-(opts.evidence ?? 2))) lines.push(`  > ${oneLine(e.from)} (${e.date}): ${oneLine(e.text)}`);
-  if (i.suggestedAction !== 'none') lines.push(`  Suggested: ${i.suggestedAction.replace('_', ' ')}`);
+  if (i.suggestedAction !== 'none') lines.push(`  Suggested: ${oneLine(i.suggestedAction).replace('_', ' ')}`);
   return lines.join('\n');
 }
 

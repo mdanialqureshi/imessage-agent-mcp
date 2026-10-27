@@ -29,9 +29,14 @@ const TIMEOUT_MS = 10 * 60_000;
 /** Interpreter output can echo message text, so it's only surfaced when explicitly debugging. */
 const DEBUG = process.env.IMESSAGE_AGENT_DEBUG === '1';
 
-function run(cmd: string, args: string[], input: string, cwd: string): Promise<string> {
+interface Output {
+  stdout: string;
+  stderr: string;
+}
+
+function run(cmd: string, args: string[], input: string, cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<Output> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(cmd, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => child.kill('SIGTERM'), TIMEOUT_MS);
@@ -40,7 +45,7 @@ function run(cmd: string, args: string[], input: string, cwd: string): Promise<s
     child.on('error', reject);
     child.on('close', (code) => {
       clearTimeout(timer);
-      if (code === 0) return resolve(stdout);
+      if (code === 0) return resolve({ stdout, stderr });
       const detail = DEBUG ? `: ${(stderr || stdout).trim().slice(-2000)}` : ' (output withheld; rerun with IMESSAGE_AGENT_DEBUG=1)';
       reject(new Error(`${path.basename(cmd)} exited with code ${code}${detail}`));
     });
@@ -89,7 +94,15 @@ let codexFeatures: string[] | null = null;
  */
 export function enabledCodexFeatures(codexBin = bin('codex')): string[] {
   if (!codexFeatures) {
-    const out = execFileSync(codexBin, ['features', 'list'], { encoding: 'utf8' });
+    // exec runs with --ignore-user-config, so list features as defaults (an empty
+    // CODEX_HOME) rather than as the user's config.toml has them.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'imessage-agent-codex-'));
+    let out: string;
+    try {
+      out = execFileSync(codexBin, ['features', 'list'], { encoding: 'utf8', env: { ...process.env, CODEX_HOME: home } });
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
     codexFeatures = out
       .split('\n')
       .map((l) => l.trim().split(/\s+/))
@@ -107,6 +120,8 @@ export function enabledCodexFeatures(codexBin = bin('codex')): string[] {
 export function codexArgs(dir: string, schemaFile: string, outFile: string, model: string | null, features: string[] = []): string[] {
   const disabled = [...new Set([...CODEX_TOOL_FEATURES, ...features])];
   const args = [
+    // --ephemeral is load-bearing: codex 0.164 still exposes collaboration tools that no
+    // flag removes, and spawn_agent only fails because ephemeral threads have no rollout.
     'exec', '--skip-git-repo-check', '--ephemeral', '--ignore-user-config', '--ignore-rules',
     ...disabled.flatMap((f) => ['--disable', f]),
     '-c', 'web_search="disabled"',
@@ -136,29 +151,44 @@ function bin(name: 'codex' | 'claude'): string {
 /** The model tried to use a tool, which only an injected instruction would cause. */
 export class ToolUseAttempt extends Error {}
 
-/** Event items a pure text answer produces. Anything else means the model tried a tool. */
+/** Allowlists for codex's --json stream; anything else fails the batch. */
+const CODEX_EVENTS = new Set(['thread.started', 'turn.started', 'item.started', 'item.updated', 'item.completed', 'turn.completed']);
 const CODEX_TEXT_ITEMS = new Set(['agent_message', 'reasoning']);
+/** The one notice codex emits before the turn because code mode is disabled. */
+const CODE_MODE_NOTICE = /^Code Mode is unavailable because code-mode host is disabled/;
+/**
+ * Log target that records every tool call, including sub-agent threads. It names only
+ * the tool and thread, never arguments or message text.
+ */
+export const CODEX_TOOL_LOG = 'codex_core::stream_events_utils=info';
 
 /**
- * Fails closed: if the model attempted any tool call during its turn (which only an
- * injected instruction would cause), the whole batch's output is discarded. Items before
- * the turn starts are startup notices, e.g. "code mode will fail closed".
+ * Fails closed: the --json stream must contain only a pure text answer, and codex's own
+ * log must record no tool call. Many tool calls (code mode, sub-agents) never appear in
+ * the --json stream, so the log is the authoritative signal. This runs after the fact:
+ * it keeps an injected tool call from affecting results, while the disabled features
+ * keep those calls from reaching anything.
  */
-export function assertNoToolUse(jsonl: string): void {
+export function assertNoToolUse(jsonl: string, log = ''): void {
+  if (/ToolCall: /.test(log)) throw new ToolUseAttempt('Interpreter attempted a tool call; output discarded');
   let inTurn = false;
   for (const line of jsonl.split('\n')) {
     if (!line.trim()) continue;
-    let event: { type?: string; item?: { type?: string } };
+    let event: { type?: string; item?: { type?: string; message?: string } };
     try {
       event = JSON.parse(line);
     } catch {
-      continue;
+      throw new ToolUseAttempt('Interpreter emitted an unrecognized event; output discarded');
+    }
+    if (!event.type || !CODEX_EVENTS.has(event.type)) {
+      throw new ToolUseAttempt(`Interpreter emitted ${event.type ?? 'an untyped'} event; output discarded`);
     }
     if (event.type === 'turn.started') inTurn = true;
-    if (event.type === 'error' || event.type === 'turn.failed') throw new Error(`Interpreter failed (${event.type})`);
-    const itemType = event.item?.type;
-    if (inTurn && itemType && !CODEX_TEXT_ITEMS.has(itemType)) {
-      throw new ToolUseAttempt(`Interpreter attempted a tool call (${itemType}); output discarded`);
+    const item = event.item;
+    if (!item) continue;
+    const startupNotice = !inTurn && item.type === 'error' && CODE_MODE_NOTICE.test(item.message ?? '');
+    if (!startupNotice && !CODEX_TEXT_ITEMS.has(item.type ?? '')) {
+      throw new ToolUseAttempt(`Interpreter emitted a ${item.type ?? 'untyped'} item; output discarded`);
     }
   }
   if (!inTurn) throw new Error('Interpreter never started a turn');
@@ -170,8 +200,9 @@ async function codex(prompt: string, config: Config): Promise<RawOp[]> {
     const schemaFile = path.join(dir, 'schema.json');
     const outFile = path.join(dir, 'out.json');
     fs.writeFileSync(schemaFile, JSON.stringify(OUTPUT_SCHEMA));
-    const events = await run(bin('codex'), codexArgs(dir, schemaFile, outFile, config.model, enabledCodexFeatures()), prompt, dir);
-    assertNoToolUse(events);
+    const env = { ...process.env, RUST_LOG: CODEX_TOOL_LOG };
+    const { stdout, stderr } = await run(bin('codex'), codexArgs(dir, schemaFile, outFile, config.model, enabledCodexFeatures()), prompt, dir, env);
+    assertNoToolUse(stdout, stderr);
     return parseOps(fs.readFileSync(outFile, 'utf8'));
   });
 }
@@ -179,8 +210,14 @@ async function codex(prompt: string, config: Config): Promise<RawOp[]> {
 /** Claude Code signed in with a Claude plan: `claude -p` with structured output and no tools. */
 async function claude(prompt: string, config: Config): Promise<RawOp[]> {
   return withScratch(async (dir) => {
-    const out = JSON.parse(await run(bin('claude'), claudeArgs(config.model), prompt, dir));
-    if (out.structured_output) return (out.structured_output as { ops: RawOp[] }).ops;
+    const { stdout } = await run(bin('claude'), claudeArgs(config.model), prompt, dir);
+    let out: { structured_output?: { ops?: unknown }; result?: unknown };
+    try {
+      out = JSON.parse(stdout);
+    } catch {
+      throw new Error('claude returned invalid JSON');
+    }
+    if (Array.isArray(out.structured_output?.ops)) return out.structured_output.ops as RawOp[];
     return parseOps(String(out.result ?? ''));
   });
 }

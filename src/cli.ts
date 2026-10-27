@@ -79,9 +79,9 @@ function exportConversations(): void {
   const out = windows.map((w) => conv.render(w)).join('\n\n---\n\n');
   const file = option('out');
   if (file) {
-    // Transcripts are private: readable only by this user.
-    fs.writeFileSync(file, out + '\n', { mode: 0o600 });
-    fs.chmodSync(file, 0o600);
+    // Transcripts are private: created fresh, readable only by this user.
+    fs.rmSync(file, { force: true });
+    fs.writeFileSync(file, out + '\n', { mode: 0o600, flag: 'wx' });
     console.log(`Wrote ${windows.length} conversations to ${file}`);
   } else console.log(out);
   db.close();

@@ -228,8 +228,8 @@ export class ChatDb {
     return rows.map((r) => this.toMessage(r)).reverse();
   }
 
-  messageByGuid(guid: string): Message | null {
-    const row = this.db.prepare(`${this.messageSelect()} AND m.guid = ?`).get(guid) as
+  messageByGuid(guid: string, chatId: number): Message | null {
+    const row = this.db.prepare(`${this.messageSelect()} AND m.guid = ? AND cmj.chat_id = ?`).get(guid, chatId) as
       | Record<string, any>
       | undefined;
     return row ? this.toMessage(row) : null;

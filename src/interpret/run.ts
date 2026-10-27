@@ -10,6 +10,44 @@ import { interpreter, type RawOp, ToolUseAttempt } from './runners.ts';
 
 /** Rough per-call transcript budget; large backlogs are split across several interpreter calls. */
 const BATCH_CHARS = 60_000;
+/** A chat whose batch fails this many runs in a row is skipped, so it can't stall every run. */
+const MAX_CHAT_FAILURES = 3;
+
+const OPS = new Set(['create', 'update', 'done', 'cancel']);
+const PRECISIONS = new Set(['exact', 'part_of_day', 'day', 'week', 'none']);
+const STRENGTHS = new Set(['firm', 'tentative', 'soft']);
+const ACTIONS = new Set(['calendar_event', 'reminder', 'reply', 'call', 'check_in', 'pay', 'save', 'none']);
+const str = (v: unknown, max: number): string | null => (typeof v === 'string' && v.trim() ? v.slice(0, max) : null);
+
+/**
+ * Validates one model op against the output schema. The schema is enforced for codex and
+ * claude's structured output, but not for claude's plain-text fallback.
+ */
+function validOp(raw: unknown): RawOp | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const title = str(o.title, 200);
+  if (!OPS.has(o.op as string) || !(KINDS as readonly string[]).includes(o.kind as string) || !title || typeof o.chat_ref !== 'string') return null;
+  return {
+    op: o.op as RawOp['op'],
+    item_id: str(o.item_id, 40),
+    chat_ref: o.chat_ref,
+    kind: o.kind as string,
+    title,
+    detail: str(o.detail, 1000),
+    person: str(o.person, 200),
+    when_start: str(o.when_start, 40),
+    when_end: str(o.when_end, 40),
+    when_text: str(o.when_text, 200),
+    precision: PRECISIONS.has(o.precision as string) ? (o.precision as string) : 'none',
+    strength: STRENGTHS.has(o.strength as string) ? (o.strength as string) : 'soft',
+    confidence: typeof o.confidence === 'number' && Number.isFinite(o.confidence) ? o.confidence : 0,
+    suggested_action: ACTIONS.has(o.suggested_action as string) ? (o.suggested_action as string) : 'none',
+    missing_details: Array.isArray(o.missing_details) ? o.missing_details.filter((d) => typeof d === 'string').slice(0, 10).map((d) => d.slice(0, 50)) : [],
+    evidence: Array.isArray(o.evidence) ? o.evidence.filter((n) => Number.isInteger(n)).slice(0, 50) : [],
+    reason: str(o.reason, 500) ?? '',
+  };
+}
 
 export interface RunResult {
   chats: number;
@@ -20,6 +58,10 @@ export interface RunResult {
   skippedOps: number;
   /** Batches whose output was thrown away because the model tried to use a tool. */
   discardedBatches: number;
+  /** Batches that errored; their chats are retried next run, up to MAX_CHAT_FAILURES. */
+  failedBatches: number;
+  /** Chats skipped after failing MAX_CHAT_FAILURES runs in a row. */
+  skippedChats: number;
   prompts?: string[];
 }
 
@@ -95,10 +137,11 @@ function toFields(op: RawOp, w: Window, conv: Conversations): ItemFields {
   };
 }
 
-function applyOps(store: Store, ops: RawOp[], windows: Map<string, Window>, conv: Conversations, result: RunResult): void {
-  for (const op of ops) {
-    const w = windows.get(op.chat_ref);
-    if (!w || !(KINDS as readonly string[]).includes(op.kind)) {
+function applyOps(store: Store, rawOps: unknown[], windows: Map<string, Window>, conv: Conversations, result: RunResult): void {
+  for (const raw of rawOps) {
+    const op = validOp(raw);
+    const w = op && windows.get(op.chat_ref);
+    if (!op || !w) {
       result.skippedOps++;
       continue;
     }
@@ -154,7 +197,8 @@ export async function interpretNow(
   const store = Store.open();
   const db = ChatDb.open();
   let dbOpen = true;
-  const result: RunResult = { chats: 0, messages: 0, created: 0, updated: 0, closed: 0, skippedOps: 0, discardedBatches: 0 };
+  let lastError: unknown = null;
+  const result: RunResult = { chats: 0, messages: 0, created: 0, updated: 0, closed: 0, skippedOps: 0, discardedBatches: 0, failedBatches: 0, skippedChats: 0 };
   const runId = opts.dryRun ? null : store.startRun(config.interpreter);
   try {
     const conv = new Conversations(db, Contacts.load(), config);
@@ -177,27 +221,52 @@ export async function interpretNow(
     db.close();
     dbOpen = false;
 
+    const failures: Record<string, number> = JSON.parse(store.getMeta('chat_failures') ?? '{}');
+    const runnable = all.filter((w) => {
+      if ((failures[w.chat.id] ?? 0) < MAX_CHAT_FAILURES) return true;
+      delete failures[w.chat.id];
+      result.skippedChats++;
+      return false;
+    });
+    const failedChats: number[] = [];
+    let succeeded = 0;
+
     const run = opts.runner ?? interpreter(config);
-    for (const batch of batches(all, transcripts, (w) => isolated.has(w.ref))) {
+    for (const batch of batches(runnable, transcripts, (w) => isolated.has(w.ref))) {
       const chats: PromptChat[] = batch.map((w) => ({ ref: w.ref, transcript: transcripts.get(w.ref)!, items: store.itemsForChat(w.chat.id) }));
       const prompt = buildPrompt(chats, now, config.replyOwedAfterHours);
       if (opts.dryRun) {
         (result.prompts ??= []).push(prompt);
         continue;
       }
-      let ops: RawOp[];
+      let ops: unknown[];
       try {
         ops = await run(prompt);
+        if (!Array.isArray(ops)) throw new Error('Interpreter returned no ops array');
       } catch (err) {
         // A hostile message must not block every future run, so only this batch is dropped.
         if (err instanceof ToolUseAttempt) {
           result.discardedBatches++;
           continue;
         }
-        throw err;
+        result.failedBatches++;
+        failedChats.push(...batch.map((w) => w.chat.id));
+        lastError = err;
+        continue;
       }
+      succeeded++;
+      for (const w of batch) delete failures[w.chat.id];
       applyOps(store, ops, new Map(batch.map((w) => [w.ref, w])), conv, result);
     }
+
+    if (result.failedBatches) {
+      // Every batch failing means the interpreter itself is down (signed out, offline):
+      // retry everything next run. Otherwise count strikes against the failing chats.
+      if (succeeded) for (const id of failedChats) failures[id] = (failures[id] ?? 0) + 1;
+      store.setMeta('chat_failures', JSON.stringify(failures));
+      throw lastError;
+    }
+    store.setMeta('chat_failures', JSON.stringify(failures));
 
     if (!opts.dryRun) {
       store.setMeta('last_rowid', String(Math.max(lastRowid, maxRowid)));
