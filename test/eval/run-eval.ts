@@ -13,6 +13,7 @@ const opt = (name: string, fallback: string) => {
   return i >= 0 ? args[i + 1] : fallback;
 };
 const which = opt('interpreter', 'both');
+if (!['claude', 'codex', 'both'].includes(which)) throw new Error('--interpreter must be claude, codex or both');
 const runs = Number(opt('runs', '1'));
 const child = args.includes('--child');
 const here = path.dirname(fileURLToPath(import.meta.url));

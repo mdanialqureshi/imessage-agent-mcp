@@ -5,12 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildBrief, formatItem } from './brief.ts';
-import { type Config, configPath, INTERPRETERS, type InterpreterName, loadConfig, paths, saveConfig } from './config.ts';
+import { type Config, configPath, INTERPRETERS, type InterpreterName, loadConfig, loadConfigDefaults, paths, saveConfig } from './config.ts';
 import { interpretNow } from './interpret/run.ts';
 import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
-import { Contacts } from './messages/contacts.ts';
 import { Conversations } from './messages/conversations.ts';
-import { httpToken, serveHttp, serveStdio } from './server.ts';
+import { APPS, which } from './apps.ts';
+import { bridge, type ServiceHealth, serviceHealth } from './bridge.ts';
+import { serveSocket, socketPath } from './server.ts';
 import { Store } from './store.ts';
 
 const LABEL = 'com.imessage-agent-mcp';
@@ -34,20 +35,40 @@ function check(label: string, fn: () => string): boolean {
   }
 }
 
-function doctor(): void {
+/** The binary that needs Full Disk Access: the node the background service runs. */
+const serviceNode = () => fs.realpathSync(process.execPath);
+
+/** What desktop apps launch: the permission-less bridge to the background service. */
+function bridgeCommand(): string[] {
+  // The stable Homebrew/nvm symlink survives Node upgrades better than the versioned binary.
+  return [which('node') ?? process.execPath, cliPath, 'connect'];
+}
+
+function fdaHelp(): string {
+  return `Give the background service Full Disk Access (macOS requires you to do this yourself):
+  1. System Settings → Privacy & Security → Full Disk Access
+  2. Click +, press ⌘⇧G, paste the path below, press Return, then Open:
+     ${serviceNode()}
+  3. Make sure its switch is on.
+  Only this one binary needs it. Your apps and terminal don't.`;
+}
+
+async function doctor(): Promise<void> {
   const config = loadConfig();
-  check('Config', () => configPath());
-  check('Messages database', () => {
-    const db = ChatDb.open();
-    const n = db.maxRowid();
-    db.close();
-    return `${paths.chatDb} (${n.toLocaleString()} messages)`;
+  console.log('This Mac (everything runs here; no network port is opened)');
+  const health = await serviceHealth(socketPath());
+  check('Background service', () => {
+    if (!fs.existsSync(plistPath)) throw new Error('not installed (run: node src/cli.ts setup)');
+    if (!health) throw new Error(`installed but not responding; see ${path.join(paths.stateDir, 'logs/service.log')}`);
+    return `running, listening only on ${socketPath()}`;
   });
-  check('Contacts', () => {
-    const n = Contacts.load().size;
-    if (!n) throw new Error('no contacts readable — names will show as phone numbers');
-    return `${n} phone numbers/emails`;
-  });
+  if (health) {
+    const ok = check('Full Disk Access', () => {
+      if (!health.canReadMessages) throw new Error("the service can't read Messages yet");
+      return `the service can read Messages (${health.messages.toLocaleString()} messages, ${health.contacts} contact handles)`;
+    });
+    if (!ok) console.log(fdaHelp().replace(/^/gm, '   '));
+  }
   for (const name of INTERPRETERS) {
     const active = name === config.interpreter;
     const ok = check(`Interpreter ${name}${active ? ' (active)' : ''}`, () => interpreterStatus(name));
@@ -58,12 +79,123 @@ function doctor(): void {
     const open = store.listItems({ status: ['open'] }).length;
     const last = store.getMeta('last_interpreted_at');
     store.close();
-    return `${open} open items, last interpreted ${last ?? 'never'}`;
+    return `${open} open items, last interpreted ${last ?? 'never'} (${configPath()})`;
   });
-  check('Background service', () => {
-    if (!fs.existsSync(plistPath)) throw new Error('not installed (run: install-service)');
-    return plistPath;
-  });
+  console.log('\nApps that can use it (they launch the local bridge; cloud agents reach your Mac through them)');
+  for (const app of APPS) {
+    if (!app.installed()) console.log(`➖ ${app.name}: not installed`);
+    else if (app.registered()) console.log(`✅ ${app.name}: connected. ${app.reach}`);
+    else console.log(`❌ ${app.name}: installed but not connected (run: node src/cli.ts setup)`);
+  }
+}
+
+function waitForService(ms: number): Promise<ServiceHealth | null> {
+  const until = Date.now() + ms;
+  const attempt = async (): Promise<ServiceHealth | null> => {
+    const h = await serviceHealth(socketPath());
+    if (h || Date.now() > until) return h;
+    await new Promise((r) => setTimeout(r, 500));
+    return attempt();
+  };
+  return attempt();
+}
+
+/** One command: interpreter, background service, app connections, permission check. */
+async function setup(): Promise<void> {
+  const chosen = option('interpreter');
+  if (chosen) useInterpreter(chosen);
+  if (process.exitCode) return;
+  const config = loadConfig();
+
+  console.log(`\n1. Interpreter: ${config.interpreter}`);
+  try {
+    console.log(`   ✅ ${interpreterStatus(config.interpreter)}`);
+  } catch (err: any) {
+    console.log(`   ❌ ${err.message}`);
+    console.log(`   Sign in, then run setup again. To use the other one: node src/cli.ts setup --interpreter ${config.interpreter === 'claude' ? 'codex' : 'claude'}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log('\n2. Background service (runs on this Mac at login; Unix socket only, no network port)');
+  installService();
+  const health = await waitForService(15_000);
+  if (!health) {
+    console.log(`   ❌ didn't start; see ${path.join(paths.stateDir, 'logs/service.log')}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`   ✅ running: ${socketPath()}`);
+
+  console.log('\n3. Connecting your apps (each launches a local bridge to the service)');
+  const only = option('apps')?.split(',');
+  const command = bridgeCommand();
+  for (const app of APPS) {
+    if (only && !only.includes(app.id)) continue;
+    if (!app.installed()) {
+      console.log(`   ➖ ${app.name}: not installed, skipped`);
+      continue;
+    }
+    try {
+      app.register(command);
+      console.log(`   ✅ ${app.name}`);
+    } catch (err: any) {
+      console.log(`   ❌ ${app.name}: ${err.message.split('\n')[0]}`);
+    }
+  }
+
+  console.log('\n4. Permission to read Messages');
+  let access = health;
+  if (!access.canReadMessages) {
+    console.log(fdaHelp().replace(/^/gm, '   '));
+    if (!flag('no-open')) spawnSync('open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles']);
+    if (process.stdout.isTTY && !flag('no-wait')) {
+      console.log('\n   Waiting for access (Ctrl-C to finish later with: node src/cli.ts doctor)…');
+      for (let i = 0; i < 120 && !access?.canReadMessages; i++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        // macOS can cache the denial in a running process, so restart it now and then.
+        if (i % 4 === 3) execFileSync('launchctl', ['kickstart', '-k', `gui/${process.getuid!()}/${LABEL}`]);
+        access = await waitForService(10_000);
+      }
+    }
+  }
+  if (access?.canReadMessages) {
+    console.log(`   ✅ the service can read Messages (${access.messages.toLocaleString()} messages)`);
+    console.log(`   It's reading the last ${config.firstRunLookbackDays} days now, then every ${config.autoInterpretMinutes} minutes. Preview: node src/cli.ts brief`);
+  } else {
+    console.log('\n   After granting access, check with: node src/cli.ts doctor');
+  }
+
+  console.log(`
+Done. How it fits together:
+  Your messages ─► background service on this Mac ─► local bridge ─► ChatGPT / Claude desktop app ─► your agent
+  Nothing listens on the network. Cloud agents (like Dot on your phone) reach the data only through a desktop
+  app running on this Mac, so the Mac needs to be on and awake.
+
+Next steps (also in the README, "Connect your agents"):
+  • Restart Claude desktop and ChatGPT desktop so they load the new connection.
+  • Dot: in the ChatGPT desktop app, open your Dot's profile → Computers → Allow access.
+  • Ask your agent: "Use the imessage tools: what did I commit to in my texts this week?"
+  • Set your cadence: "Every day at 9am and 6pm, check my imessage brief and tell me what needs attention."`);
+}
+
+function uninstall(): void {
+  for (const app of APPS) {
+    try {
+      if (app.installed() && app.registered()) {
+        app.unregister();
+        console.log(`Disconnected ${app.name}`);
+      }
+    } catch (err: any) {
+      console.log(`Couldn't disconnect ${app.name}: ${err.message.split('\n')[0]}`);
+    }
+  }
+  uninstallService();
+  if (flag('delete-data')) {
+    fs.rmSync(paths.stateDir, { recursive: true, force: true });
+    console.log(`Deleted ${paths.stateDir}`);
+  } else console.log(`Kept your items in ${paths.stateDir} (add --delete-data to remove them).`);
+  console.log(`You can also remove ${serviceNode()} from Full Disk Access in System Settings.`);
 }
 
 /**
@@ -72,6 +204,7 @@ function doctor(): void {
  */
 function interpreterStatus(name: InterpreterName): string {
   if (name === 'claude') {
+    if (process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is set in this shell, so terminal runs would bill the API; unset it');
     const status = JSON.parse(execFileSync('claude', ['auth', 'status'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
     if (!status.loggedIn) throw new Error('not signed in (run: claude)');
     if (status.authMethod !== 'claude.ai') throw new Error(`signed in via ${status.authMethod}: this would bill API usage, sign in with your Claude plan instead`);
@@ -79,9 +212,14 @@ function interpreterStatus(name: InterpreterName): string {
   }
   // codex prints its login status on stderr.
   const res = spawnSync('codex', ['login', 'status'], { encoding: 'utf8' });
-  if (res.error) throw res.error;
-  const out = `${res.stdout}${res.stderr}`.trim();
-  if (res.status !== 0 || !/ChatGPT/i.test(out)) throw new Error(`${out.split('\n')[0]}: sign in with your ChatGPT plan (codex login) to avoid API billing`);
+  if (res.error) throw new Error('not installed');
+  // Never echo the status line: for API-key logins it contains part of the key.
+  if (res.status !== 0 || !/ChatGPT/i.test(`${res.stdout}${res.stderr}`)) {
+    throw new Error('not signed in with a ChatGPT plan; run `codex login` to avoid API billing');
+  }
+  for (const key of ['CODEX_API_KEY', 'OPENAI_API_KEY']) {
+    if (process.env[key]) throw new Error(`${key} is set in this shell, so terminal runs would bill the API; unset it`);
+  }
   return 'signed in with a ChatGPT plan';
 }
 
@@ -91,9 +229,15 @@ function useInterpreter(name: string | undefined): void {
     process.exitCode = 1;
     return;
   }
-  const config: Config = { ...loadConfig(), interpreter: name as InterpreterName };
-  saveConfig(config);
-  console.log(`Interpreter set to ${name}. The background service picks this up on its next run.`);
+  // Read the raw file so `use` can also repair a config with an invalid interpreter.
+  let current: Partial<Config> = {};
+  try {
+    current = JSON.parse(fs.readFileSync(configPath(), 'utf8'));
+  } catch {
+    // Missing or unreadable: start from defaults.
+  }
+  saveConfig({ ...loadConfigDefaults(), ...current, interpreter: name as InterpreterName });
+  console.log(`Interpreter set to ${name}. The background service uses it from its next run.`);
 }
 
 /** Prints what the interpreter would see, for review and labeling. */
@@ -117,21 +261,12 @@ function exportConversations(): void {
 
 const xml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-/** Absolute path of a CLI on the current PATH, pinned into the service so PATH lookups can't be hijacked. */
-function which(name: string): string | null {
-  try {
-    // Not realpath'd: self-updating CLIs keep a stable symlink while the versioned binary moves.
-    return execFileSync('/usr/bin/which', [name], { encoding: 'utf8' }).trim() || null;
-  } catch {
-    return null;
-  }
-}
-
 function plist(): string {
   const config = loadConfig();
   const logDir = path.join(paths.stateDir, 'logs');
   fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
-  // Both CLIs are pinned when installed, so `use codex` / `use claude` works without reinstalling.
+  // Both CLIs are pinned when installed (not realpath'd: self-updating CLIs keep a stable
+  // symlink), so `use codex` / `use claude` works without reinstalling.
   const env: Record<string, string> = {
     PATH: [path.dirname(fs.realpathSync(process.execPath)), '/usr/bin', '/bin'].join(':'),
   };
@@ -143,7 +278,7 @@ function plist(): string {
     throw new Error(`${config.interpreter} not found on PATH; install and sign in first, or: node src/cli.ts use <claude|codex>`);
   }
   const envXml = Object.entries(env).map(([k, v]) => `<key>${xml(k)}</key><string>${xml(v)}</string>`).join('');
-  const args = [process.execPath, cliPath, 'serve', '--http'].map((a) => `    <string>${xml(a)}</string>`).join('\n');
+  const args = [process.execPath, cliPath, 'serve'].map((a) => `    <string>${xml(a)}</string>`).join('\n');
   const log = xml(path.join(logDir, 'service.log'));
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -176,15 +311,7 @@ function installService(): void {
   }
   fs.writeFileSync(plistPath, plist());
   execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath]);
-  const node = fs.realpathSync(process.execPath);
-  console.log(`Installed and started ${LABEL}.
-Logs: ${path.join(paths.stateDir, 'logs/service.log')}
-
-One manual step: give the background service Full Disk Access.
-  System Settings → Privacy & Security → Full Disk Access → + → press ⌘⇧G and paste:
-  ${node}
-Then restart it:  launchctl kickstart -k gui/${uid}/${LABEL}
-(Re-do this after upgrading Node, since the binary path changes.)`);
+  console.log(`   Installed ${LABEL} (logs: ${path.join(paths.stateDir, 'logs/service.log')})`);
 }
 
 function uninstallService(): void {
@@ -194,12 +321,19 @@ function uninstallService(): void {
     // Already stopped.
   }
   fs.rmSync(plistPath, { force: true });
-  console.log(`Removed ${LABEL}.`);
+  fs.rmSync(socketPath(), { force: true });
+  console.log(`Removed the background service (${LABEL}).`);
 }
 
 async function main(): Promise<void> {
   sweepSnapshots();
   switch (command) {
+    case 'setup':
+      return setup();
+    case 'connect':
+      return bridge(socketPath());
+    case 'uninstall':
+      return uninstall();
     case 'doctor':
       return doctor();
     case 'export':
@@ -225,37 +359,40 @@ async function main(): Promise<void> {
       return store.close();
     }
     case 'serve':
-      if (flag('http')) await serveHttp({ autoInterpret: !flag('no-auto') });
-      else await serveStdio();
+      await serveSocket({ autoInterpret: !flag('no-auto') });
       return;
     case 'use':
       return useInterpreter(rest[0]);
-    case 'token':
-      return console.log(httpToken());
     case 'install-service':
       return installService();
     case 'uninstall-service':
       return uninstallService();
     default:
-      console.log(`imessage-agent-mcp — iMessage commitments for any AI agent
+      console.log(`imessage-agent-mcp: your iMessage commitments for any AI agent, running only on this Mac.
 
 Usage: node src/cli.ts <command>
 
-  doctor               Check permissions, contacts, interpreter and service
-  export [--days 7] [--out file]
-                       Print conversations exactly as the interpreter sees them
-  interpret [--dry-run] [--interpreter claude|codex]
-                       Interpret new messages now (--dry-run prints the prompt only)
+Setup
+  setup [--interpreter claude|codex] [--apps chatgpt,claude-desktop,claude-code,cursor]
+                       Install the background service and connect your apps
+  doctor               Check the service, permissions, interpreter and connected apps
   use <claude|codex>   Choose which subscription CLI reads your messages
+  uninstall [--delete-data]
+                       Disconnect apps and remove the service
+
+Everyday
   brief [--since ISO] [--all]
                        Print the brief agents receive
   items [--all]        List tracked items
-  serve                MCP over stdio (Claude Code/Desktop, Codex, Cursor)
-  serve --http [--no-auto]
-                       MCP over HTTP on localhost, interpreting in the background
-  token                Print the bearer token HTTP clients must send
-  install-service      Run "serve --http" at login via launchd
-  uninstall-service    Remove the launchd service`);
+
+Plumbing
+  connect              The local bridge apps launch (MCP over stdio → the service)
+  serve [--no-auto]    The background service (what launchd runs)
+  install-service | uninstall-service
+                       Just the launchd service
+  interpret [--dry-run] [--interpreter claude|codex]
+  export [--days 7] [--out file]
+                       Debugging from a terminal; these need Full Disk Access for the terminal itself`);
   }
 }
 

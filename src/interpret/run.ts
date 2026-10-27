@@ -5,8 +5,9 @@ import { ChatDb, type Message } from '../messages/chatdb.ts';
 import { Contacts } from '../messages/contacts.ts';
 import { Conversations, displayText, formatTime, type Window } from '../messages/conversations.ts';
 import { type Evidence, type ItemFields, KINDS, type Kind, Store } from '../store.ts';
+import { clip, oneLine } from '../text.ts';
 import { buildPrompt, type PromptChat } from './prompt.ts';
-import { interpreter, type RawOp, ToolUseAttempt } from './runners.ts';
+import { InterpreterUnavailable, interpreter, type RawOp, ToolUseAttempt } from './runners.ts';
 
 /** Rough per-call transcript budget; large backlogs are split across several interpreter calls. */
 const BATCH_CHARS = 60_000;
@@ -80,7 +81,7 @@ function acquireLock(): () => void {
   } catch (err: any) {
     if (err.code !== 'ENOENT') throw err;
   }
-  fs.writeFileSync(file, String(process.pid));
+  fs.writeFileSync(file, String(process.pid), { mode: 0o600 });
   return () => fs.rmSync(file, { force: true });
 }
 
@@ -245,8 +246,10 @@ export async function interpretNow(
         if (!Array.isArray(ops)) throw new Error('Interpreter returned no ops array');
       } catch (err) {
         // A hostile message must not block every future run, so only this batch is dropped.
-        // So is any failure in a stranger's isolated chat: no one else's messages are held up.
-        if (err instanceof ToolUseAttempt || batch.every((w) => isolated.has(w.ref))) {
+        // So is a stranger's chat whose output is unusable. An unavailable interpreter
+        // (signed out, offline) is retried instead, so nothing is lost to an outage.
+        const strangerOnly = batch.every((w) => isolated.has(w.ref));
+        if (err instanceof ToolUseAttempt || (strangerOnly && !(err instanceof InterpreterUnavailable))) {
           result.discardedBatches++;
           continue;
         }
@@ -278,7 +281,8 @@ export async function interpretNow(
     }
     return result;
   } catch (err: any) {
-    if (runId) store.finishRun(runId, { ...result, error: String(err.message ?? err) });
+    // Stored errors are shown to agents; keep them short and on one line.
+    if (runId) store.finishRun(runId, { ...result, error: clip(oneLine(String(err.message ?? err)), 300) });
     throw err;
   } finally {
     if (dbOpen) db.close();

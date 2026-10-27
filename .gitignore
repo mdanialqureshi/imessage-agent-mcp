@@ -15,7 +15,7 @@ logs/
 .env
 .env.*
 test/.tmp/
-http-token
+*.sock
 interpret.lock
 snapshot*/
 *.storedata

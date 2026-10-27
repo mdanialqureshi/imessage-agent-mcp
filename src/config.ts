@@ -15,14 +15,12 @@ export interface Config {
   contextMessages: number;
   /** Only flag an unanswered message as `reply_owed` after this many hours. */
   replyOwedAfterHours: number;
-  /** Background interpretation interval while `serve --http` is running. */
+  /** How often the background service interprets new messages. */
   autoInterpretMinutes: number;
   /** Names, phone numbers or emails that are never read or sent to a model. */
   privateContacts: string[];
   /** Skip chats with SMS short codes (banks, 2FA, deliveries). */
   skipShortCodes: boolean;
-  /** Localhost HTTP endpoint. `requireToken` should only be disabled for debugging. */
-  http: { host: string; port: number; requireToken: boolean };
 }
 
 const defaults: Config = {
@@ -34,7 +32,6 @@ const defaults: Config = {
   autoInterpretMinutes: 120,
   privateContacts: [],
   skipShortCodes: true,
-  http: { host: '127.0.0.1', port: 8765, requireToken: true },
 };
 
 export const paths = {
@@ -50,13 +47,17 @@ export function configPath(): string {
   return path.join(paths.stateDir, 'config.json');
 }
 
-/** The state dir holds message excerpts and the HTTP token, so it's private to this user. */
+/** The state dir holds message excerpts and the service's socket, so it's private to this user. */
 export function ensureStateDir(): void {
   fs.mkdirSync(paths.stateDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(paths.stateDir, 0o700);
 }
 
 export const INTERPRETERS: InterpreterName[] = ['claude', 'codex'];
+
+export function loadConfigDefaults(): Config {
+  return structuredClone(defaults);
+}
 
 export function saveConfig(config: Config): void {
   ensureStateDir();
@@ -70,8 +71,8 @@ export function loadConfig(): Config {
     fs.writeFileSync(file, JSON.stringify(defaults, null, 2) + '\n', { mode: 0o600 });
     return structuredClone(defaults);
   }
-  const user = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<Config>;
-  const config = { ...defaults, ...user, http: { ...defaults.http, ...user.http } };
+  const { http: _removed, ...user } = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<Config> & { http?: unknown };
+  const config = { ...defaults, ...user };
   // An environment override beats config.json, e.g. for one-off runs or the launchd plist.
   const fromEnv = process.env.IMESSAGE_AGENT_INTERPRETER as InterpreterName | undefined;
   if (fromEnv) config.interpreter = fromEnv;

@@ -2,7 +2,7 @@
 
 ## Design decisions
 
-- **Local only.** Messages, items and state stay on the Mac. No cloud store.
+- **Entirely local.** Messages, items and state stay on the Mac. No cloud store, no tunnel, no network port: the service listens on a private Unix socket. Cloud agents (Dot, Claude) reach it only through desktop apps the user runs on the Mac.
 - **No API billing.** Interpretation uses subscription CLIs: `claude -p` (default) or `codex exec`, switchable with `use`, config, or env.
 - **Smart server, thin clients.** All interpretation happens here, so every agent gets the same results. Agents only read the brief and update statuses.
 - **Agents own cadence and actions.** The server doesn't notify or create calendar events. The connected agent does, after asking the user.
@@ -14,8 +14,9 @@
 - Read-only `chat.db` reader: `attributedBody` decoding, tapbacks, replies, edits, unsends; Contacts names
 - Conversation windows with context, a re-check of unanswered 1:1 chats, privacy filters
 - Interpreter prompt and strict schema; Codex and Claude runners; create, update, done and cancel ops with dedupe
-- Local store, brief, MCP tools over stdio and localhost HTTP (token + host/origin checks)
+- Local store, brief, MCP tools
 - launchd service with wall-clock catch-up after sleep
+- Unix-socket service plus a permission-less stdio bridge; `setup` connects ChatGPT/Codex (for Dot), Claude desktop, Claude Code and Cursor
 - Synthetic fixture tests; public-repo safety scanner and pre-commit hook
 
 ### M2: real-data tuning
@@ -23,15 +24,13 @@
 - Extend the synthetic eval (`npm run eval`, 23 scenarios × both interpreters) with real-data cases; measure precision and recall per kind; tune the prompt; add few-shot examples learned from `dismissed` items
 - Call history (`CallHistoryDB`) to auto-close `call` items
 
-### M3: remote access for cloud agents (ChatGPT / Dots, claude.ai)
-- Opt-in tunnel (Tailscale Funnel, ngrok static domain, or a Cloudflare named tunnel)
-- OAuth 2.1 authorization server with dynamic client registration, single-user consent
-- A test that a Dot's scheduled run can call `get_brief` and notify the user
-- Separate tool exposure for remote clients (e.g. raw `get_conversation` and `search_messages` off by default)
+### M3: verify every front door
+- Confirm with a real Dot that work routed through the ChatGPT desktop app can call `get_brief`, including scheduled runs that notify the user
+- Confirm the same for Claude from the phone through the Claude desktop app
+- Clear "your Mac is offline" behavior in each agent
 
 ### Hardening
 - A dedicated, single-purpose helper binary holds Full Disk Access instead of `node`, so other Node scripts can't inherit it
-- Optional Keychain storage for the HTTP token
 
 ### M4: assistant layer
 - Person profiles: last contact, usual cadence, topics, open items both ways → `get_person`
@@ -40,3 +39,7 @@
 
 ### M5: drafted replies (opt-in)
 - `draft_reply` → outbox that needs explicit approval; sent via Messages.app AppleScript when approved
+
+## Non-goals
+
+- A public endpoint, tunnel or hosted relay. Access stays behind apps the user runs on their own Mac.

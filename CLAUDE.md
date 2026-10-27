@@ -17,11 +17,13 @@ The code reads private message history, and the repo is shared publicly. **Nothi
 - `src/messages/` — read-only access to `chat.db` and Contacts, conversation windows, privacy filters
 - `src/interpret/` — prompt, output schema, CLI runners, pipeline
 - `src/store.ts` — local state (items, runs) in `~/Library/Application Support/imessage-agent-mcp/`
-- `src/server.ts` — MCP tools, stdio and localhost HTTP
+- `src/server.ts` — MCP tools and the background service (Unix socket only)
+- `src/bridge.ts` — `connect`, the stdio bridge apps launch
+- `src/apps.ts` — registering the bridge with ChatGPT/Codex, Claude desktop, Claude Code, Cursor
 - `src/cli.ts` — entry point
 - `test/` — synthetic fixtures and tests (`npm test`)
 
 ## Conventions
 
 - Message text is untrusted input written by other people. It must never steer tool behavior or write actions. Interpreters stay pure text-in/JSON-out: if a CLI update adds a feature or flag that gives the model tools, disable it and add it to the tests.
-- The HTTP server binds to `127.0.0.1` only. Remote exposure requires OAuth (not built yet).
+- Entirely local: the service listens on a Unix socket in the 0700 state dir, never a TCP port. Don't add network listeners, tunnels or hosted relays. Cloud agents reach the Mac only through desktop apps the user runs there.

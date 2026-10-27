@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import http from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -246,37 +245,73 @@ test('MCP server exposes read-only tools and updates status', async () => {
   await client.close();
 });
 
-test('HTTP endpoint requires a local host header and the bearer token', async () => {
-  const { serveHttp, httpToken } = await import('../src/server.ts');
-  const config = { ...loadConfig(), http: { host: '127.0.0.1', port: 18765, requireToken: true } };
-  const server = await serveHttp({ autoInterpret: false, config });
-  const url = 'http://127.0.0.1:18765/mcp';
+test('service listens only on a private Unix socket, and the bridge relays MCP to it', async () => {
+  const { serveSocket, socketPath } = await import('../src/server.ts');
+  const { bridge, serviceHealth, SERVICE_DOWN } = await import('../src/bridge.ts');
+  const { PassThrough } = await import('node:stream');
+  fs.writeFileSync(socketPath(), ''); // a stale file from a crash must not block startup
+  const service = await serveSocket({ autoInterpret: false });
+  const relay = async (messages: object[]) => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    let out = '';
+    output.on('data', (d) => (out += d));
+    const done = bridge(socketPath(), input, output);
+    for (const m of messages) input.write(JSON.stringify(m) + '\n');
+    input.end();
+    await done;
+    return out.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  };
   const init = {
     jsonrpc: '2.0', id: 1, method: 'initialize',
     params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } },
   };
-  const post = (headers: Record<string, string>) =>
-    fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...headers },
-      body: JSON.stringify(init),
-    });
   try {
-    assert.equal((await post({})).status, 401, 'no token');
-    assert.equal((await post({ authorization: 'Bearer wrong' })).status, 401, 'wrong token');
-    assert.equal((await post({ authorization: `Bearer ${httpToken()}`, origin: 'https://evil.example.com' })).status, 403, 'foreign origin');
-    const health = (host: string) => new Promise<number>((resolve) => {
-      http.get({ host: '127.0.0.1', port: 18765, path: '/health', headers: { host } }, (r) => resolve(r.statusCode!));
-    });
-    assert.equal(await health('127.0.0.1:18765'), 200);
-    assert.equal(await health('rebind.example.com:18765'), 403, 'health rejects foreign Host (DNS rebinding)');
-    const ok = await post({ authorization: `Bearer ${httpToken()}` });
-    assert.equal(ok.status, 200);
-    assert.match(await ok.text(), /imessage-agent/);
-    await assert.rejects(serveHttp({ autoInterpret: false, config: { ...config, http: { ...config.http, host: '0.0.0.0' } } }), /loopback/);
+    assert.equal(typeof service.address(), 'string', 'bound to a socket path, not a TCP port');
+    assert.equal(fs.statSync(socketPath()).mode & 0o777, 0o600, 'socket is private to this user');
+    await assert.rejects(serveSocket({ autoInterpret: false }), /already running/);
+    const health = await serviceHealth(socketPath());
+    assert.equal(health?.canReadMessages, true);
+    assert.ok(health!.messages > 0 && health!.contacts > 0);
+
+    const replies = await relay([
+      init,
+      { jsonrpc: '2.0', method: 'notifications/initialized' },
+      { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+      { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'get_status', arguments: {} } },
+    ]);
+    const byId = new Map(replies.map((r) => [r.id, r]));
+    assert.equal(replies.length, 3, 'notifications get no reply');
+    assert.match(byId.get(1).result.instructions, /runs only on the user's Mac/);
+    assert.ok(byId.get(2).result.tools.some((t: { name: string }) => t.name === 'get_brief'));
+    assert.match(byId.get(3).result.content[0].text, /Open items/);
   } finally {
-    server.close();
+    await new Promise((r) => service.close(r));
   }
+  assert.equal(fs.existsSync(socketPath()), false, 'socket removed on shutdown');
+  const down = await relay([init]);
+  assert.equal(down[0].id, 1);
+  assert.equal(down[0].error.message, SERVICE_DOWN, 'apps get a clear message when the service is off');
+});
+
+test('app registration merges into JSON configs without touching other servers', async () => {
+  const { jsonApp, SERVER_NAME } = await import('../src/apps.ts');
+  const file = path.join(dir, 'app-config', 'claude_desktop_config.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ preferences: { theme: 'dark' }, mcpServers: { other: { command: 'x' } } }));
+  const app = jsonApp(file);
+  assert.equal(app.registered(), false);
+  app.register(['/usr/local/bin/node', '/repo/src/cli.ts', 'connect']);
+  const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(after.mcpServers[SERVER_NAME], { command: '/usr/local/bin/node', args: ['/repo/src/cli.ts', 'connect'] });
+  assert.deepEqual(after.mcpServers.other, { command: 'x' });
+  assert.deepEqual(after.preferences, { theme: 'dark' });
+  assert.ok(fs.existsSync(`${file}.before-imessage-agent`), 'original backed up');
+  app.unregister();
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers), ['other']);
+  fs.writeFileSync(file, '{ not json');
+  assert.throws(() => app.register(['n', 'c', 'connect']), /isn't valid JSON/, 'never overwrites a config it cannot parse');
+  assert.equal(fs.readFileSync(file, 'utf8'), '{ not json');
 });
 
 test('a hostile batch is dropped but the run completes and moves on', async () => {
@@ -315,6 +350,14 @@ test('a failing stranger chat is dropped at once; failing contact chats get thre
   });
   assert.equal(stranger.discardedBatches, 1, 'stranger failure never blocks the run');
 
+  // An outage (signed out, offline) is retried, not discarded, even for a stranger's chat.
+  const { InterpreterUnavailable } = await import('../src/interpret/runners.ts');
+  reset({ last_rowid: '0', chat_failures: '{}' });
+  await assert.rejects(interpretNow({ config: loadConfig(), now: NOW, runner: async () => { throw new InterpreterUnavailable('claude exited with code 1'); } }), /exited/);
+  const after = Store.open();
+  assert.equal(after.getMeta('last_rowid'), '0', 'checkpoint not advanced during an outage');
+  after.close();
+
   reset({ last_rowid: '0', chat_failures: '{}' });
   const runner = async (prompt: string) => {
     if (prompt.includes('Ali Rahman')) throw new Error('timeout');
@@ -352,7 +395,6 @@ test('state is private to the user', () => {
   const state = process.env.IMESSAGE_AGENT_STATE_DIR!;
   assert.equal(mode(state), 0o700);
   assert.equal(mode(path.join(state, 'state.db')), 0o600);
-  assert.equal(mode(path.join(state, 'http-token')), 0o600);
   assert.equal(mode(path.join(state, 'config.json')), 0o600);
   for (const side of ['state.db-wal', 'state.db-shm']) {
     if (fs.existsSync(path.join(state, side))) assert.equal(mode(path.join(state, side)), 0o600, side);

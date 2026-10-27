@@ -29,6 +29,9 @@ const TIMEOUT_MS = 10 * 60_000;
 /** Interpreter output can echo message text, so it's only surfaced when explicitly debugging. */
 const DEBUG = process.env.IMESSAGE_AGENT_DEBUG === '1';
 
+/** The CLI couldn't run or exited non-zero (signed out, offline, usage limit): retryable. */
+export class InterpreterUnavailable extends Error {}
+
 interface Output {
   stdout: string;
   stderr: string;
@@ -42,12 +45,12 @@ function run(cmd: string, args: string[], input: string, cwd: string, env: NodeJ
     const timer = setTimeout(() => child.kill('SIGTERM'), TIMEOUT_MS);
     child.stdout.on('data', (d) => (stdout += d));
     child.stderr.on('data', (d) => (stderr += d));
-    child.on('error', reject);
+    child.on('error', (err) => reject(new InterpreterUnavailable(`${path.basename(cmd)} could not start (${(err as NodeJS.ErrnoException).code ?? 'error'})`)));
     child.on('close', (code) => {
       clearTimeout(timer);
       if (code === 0) return resolve({ stdout, stderr });
       const detail = DEBUG ? `: ${(stderr || stdout).trim().slice(-2000)}` : ' (output withheld; rerun with IMESSAGE_AGENT_DEBUG=1)';
-      reject(new Error(`${path.basename(cmd)} exited with code ${code}${detail}`));
+      reject(new InterpreterUnavailable(`${path.basename(cmd)} exited with code ${code}${detail}`));
     });
     child.stdin.end(input);
   });
