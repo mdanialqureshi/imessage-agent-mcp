@@ -37,16 +37,30 @@ const quiet = (cmd: string, args: string[]) => {
   }
 };
 
+const isPlainObject = (v: unknown): v is Record<string, any> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** Whether a configured server is this project's bridge, so we never replace or remove someone else's. */
+const isBridge = (text: string) => /cli\.ts\b/.test(text) && /\bconnect\b/.test(text);
+
+const NOT_OURS = `an unrelated MCP server named "${SERVER_NAME}" is already configured; rename or remove it first`;
+
 /** Apps configured by a JSON file with an `mcpServers` map (Claude Desktop, Cursor). */
 export function jsonApp(file: string): Pick<App, 'registered' | 'register' | 'unregister'> {
   const read = (): Record<string, any> => {
     if (!fs.existsSync(file)) return {};
+    let config: unknown;
     try {
-      return JSON.parse(fs.readFileSync(file, 'utf8'));
+      config = JSON.parse(fs.readFileSync(file, 'utf8'));
     } catch {
       throw new Error(`${file} isn't valid JSON; fix or remove it first (not overwriting it)`);
     }
+    if (!isPlainObject(config) || (config.mcpServers !== undefined && !isPlainObject(config.mcpServers))) {
+      throw new Error(`${file} has an unexpected shape; not changing it`);
+    }
+    return config;
   };
+  const entry = (config: Record<string, any>) => config.mcpServers?.[SERVER_NAME];
+  const ours = (e: any) => isPlainObject(e) && isBridge(JSON.stringify([e.command, e.args]));
   const write = (config: Record<string, any>) => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const backup = `${file}.before-imessage-agent`;
@@ -56,19 +70,20 @@ export function jsonApp(file: string): Pick<App, 'registered' | 'register' | 'un
   return {
     registered: () => {
       try {
-        return Boolean(read().mcpServers?.[SERVER_NAME]);
+        return ours(entry(read()));
       } catch {
         return false;
       }
     },
     register: ([command, ...args]) => {
       const config = read();
+      if (entry(config) && !ours(entry(config))) throw new Error(NOT_OURS);
       config.mcpServers = { ...config.mcpServers, [SERVER_NAME]: { command, args } };
       write(config);
     },
     unregister: () => {
       const config = read();
-      if (!config.mcpServers?.[SERVER_NAME]) return;
+      if (!ours(entry(config))) return;
       delete config.mcpServers[SERVER_NAME];
       write(config);
     },
@@ -76,21 +91,31 @@ export function jsonApp(file: string): Pick<App, 'registered' | 'register' | 'un
 }
 
 /** Apps configured through their own CLI (`<cli> mcp add|remove|get`). */
-function cliApp(cli: () => string | null, addArgs: string[], removeArgs: string[]): Pick<App, 'registered' | 'register' | 'unregister'> {
+function cliApp(
+  cli: () => string | null,
+  addArgs: string[],
+  removeArgs: string[],
+  configFile?: () => string,
+): Pick<App, 'registered' | 'register' | 'unregister'> {
+  const current = () => {
+    const bin = cli();
+    return bin ? quiet(bin, ['mcp', 'get', SERVER_NAME]) : null;
+  };
   return {
-    registered: () => {
-      const bin = cli();
-      return Boolean(bin && quiet(bin, ['mcp', 'get', SERVER_NAME]));
-    },
+    registered: () => isBridge(current() ?? ''),
     register: (command) => {
       const bin = cli();
       if (!bin) throw new Error('CLI not found');
-      quiet(bin, ['mcp', 'remove', ...removeArgs, SERVER_NAME]);
+      const existing = current();
+      if (existing && !isBridge(existing)) throw new Error(NOT_OURS);
+      const file = configFile?.();
+      if (file && fs.existsSync(file) && !fs.existsSync(`${file}.before-imessage-agent`)) fs.copyFileSync(file, `${file}.before-imessage-agent`);
+      if (existing) quiet(bin, ['mcp', 'remove', ...removeArgs, SERVER_NAME]);
       execFileSync(bin, ['mcp', 'add', ...addArgs, SERVER_NAME, '--', ...command], { stdio: ['ignore', 'pipe', 'pipe'] });
     },
     unregister: () => {
       const bin = cli();
-      if (bin) quiet(bin, ['mcp', 'remove', ...removeArgs, SERVER_NAME]);
+      if (bin && isBridge(current() ?? '')) quiet(bin, ['mcp', 'remove', ...removeArgs, SERVER_NAME]);
     },
   };
 }
@@ -108,9 +133,9 @@ export const APPS: App[] = [
   {
     id: 'chatgpt',
     name: 'ChatGPT desktop app & Codex (for Dot)',
-    reach: 'Dot reaches your Mac through the ChatGPT desktop app once you allow computer access on its profile',
+    reach: 'Dot should reach it through the ChatGPT desktop app once you allow computer access on its profile (not yet verified)',
     installed: () => fs.existsSync('/Applications/ChatGPT.app') || Boolean(codexCli()),
-    ...cliApp(codexCli, [], []),
+    ...cliApp(codexCli, [], [], () => path.join(process.env.CODEX_HOME || path.join(home, '.codex'), 'config.toml')),
   },
   {
     id: 'claude-desktop',

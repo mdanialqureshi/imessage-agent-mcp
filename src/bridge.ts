@@ -77,6 +77,10 @@ export function bridge(sock: string, input: NodeJS.ReadableStream = process.stdi
         write({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
         return;
       }
+      if (msg === null || typeof msg !== 'object' || (Array.isArray(msg) && !msg.length)) {
+        write({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } });
+        return;
+      }
       const p = forward(msg, line).finally(() => pending.delete(p));
       pending.add(p);
     });

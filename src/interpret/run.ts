@@ -254,7 +254,8 @@ export async function interpretNow(
           continue;
         }
         result.failedBatches++;
-        failedChats.push(...batch.map((w) => w.chat.id));
+        // Strikes are for chats whose content breaks the interpreter, not for outages.
+        if (!(err instanceof InterpreterUnavailable)) failedChats.push(...batch.map((w) => w.chat.id));
         lastError = err;
         continue;
       }

@@ -54,9 +54,11 @@ There is **no server on the internet, no tunnel, no public URL and no open netwo
 
 1. **The background service** starts at login, reads Messages and Contacts read-only, and every two hours turns new messages into items. It listens only on a Unix socket file in a private folder (`0700`), so only processes running as you can talk to it. Nothing on your network, or on the internet, can.
 2. **The local bridge** (`node src/cli.ts connect`) is what your apps launch, like any local MCP server. It relays requests to the service's socket. Because the bridge reads nothing itself, your apps and your terminal don't need Full Disk Access.
-3. **Desktop apps are the interface.** `setup` registers the bridge with the ChatGPT desktop app (through its Codex config), the Claude desktop app, Claude Code and Cursor. Cloud agents never connect to your Mac directly. **Dot** works with your Mac through the ChatGPT desktop app once you allow computer access on its profile ([OpenAI docs](https://learn.chatgpt.com/docs/dots/computers-and-apps)). So asking Dot on your phone "what did I promise Ali?" works as long as the Mac is on, awake and running the app.
+3. **Desktop apps are the interface.** `setup` registers the bridge with the ChatGPT desktop app (through its Codex config), the Claude desktop app, Claude Code and Cursor. Cloud agents never connect to your Mac directly. **Dot** works with your Mac through the ChatGPT desktop app once you allow computer access on its profile ([OpenAI docs](https://learn.chatgpt.com/docs/dots/computers-and-apps)). The goal is that asking Dot on your phone "what did I promise Ali?" works as long as the Mac is on, awake and running the app.
 
-\*Claude from your phone: it works where your Claude app hands the work to the Claude desktop app on your Mac. Otherwise, use it from the Mac.
+> **Verified so far:** Claude Code, Codex and the Claude desktop app calling the tools on the Mac. **Not yet verified:** Dot reaching them through the ChatGPT desktop app. OpenAI documents that a connected Dot can run local Codex tasks, which use the Codex config `setup` writes, but doesn't explicitly mention MCP servers. This is the next milestone ([roadmap](docs/roadmap.md)); please open an issue with what you see.
+
+\*Claude from your phone: it should work wherever your Claude app hands the work to the Claude desktop app on your Mac (not yet verified). Otherwise, use it from the Mac.
 
 ### What leaves your Mac, and when
 
@@ -104,7 +106,7 @@ node src/cli.ts setup --interpreter claude     # or: --interpreter codex
    - Cursor (`~/.cursor/mcp.json`)
 
    Choose a subset with `--apps chatgpt,claude-desktop`.
-4. **Asks for Full Disk Access.** macOS requires you to grant this yourself. `setup` opens the right settings pane and prints the one binary to add (the `node` the service runs). Click **+**, press **⌘⇧G**, paste the path, and switch it on. That's the only permission anything needs.
+4. **Asks for Full Disk Access.** macOS requires you to grant this yourself. `setup` opens the right settings pane and prints the one binary to add (the `node` the service runs). Click **+**, press **⌘⇧G**, paste the path, and switch it on. That's the only permission anything needs. It's your shared Node binary, so any other Node program that launchd starts directly would get access too. A dedicated helper binary is on the [roadmap](docs/roadmap.md).
 
 Then run `node src/cli.ts doctor` any time to see the service, permission, interpreter and connected apps at a glance. The first run reads the last 7 days in the background. Preview the result with `node src/cli.ts brief`.
 
@@ -112,7 +114,7 @@ Then run `node src/cli.ts doctor` any time to see the service, permission, inter
 
 Restart each desktop app after `setup` so it loads the `imessage` connection.
 
-**Dot (ChatGPT)**
+**Dot (ChatGPT)** (not yet verified end to end; see above)
 1. Make sure the ChatGPT desktop app is installed on the Mac, signed in, and was restarted after `setup`.
 2. In the ChatGPT desktop app, open your Dot's profile → **Computers** → **Your computer** → **Allow access**, then confirm. You can revoke it there any time.
 3. Tell your Dot: *"When I ask about my texts, plans or commitments, use the `imessage` tools on my Mac."* Then try: *"What did I commit to in my texts this week?"*
@@ -196,9 +198,9 @@ There is no tool that sends, edits or deletes messages. Read-only tools carry `r
 - **Local state only**, in `~/Library/Application Support/imessage-agent-mcp/`: items, short evidence quotes, run history. All files are `0600`.
 - **The interpreter is a pure text-in, JSON-out call.** Message text is attacker-controlled, so the interpreter gets no tools, and it never loads the `imessage` connection that `setup` adds to your apps:
   - `claude -p` (**the most locked-down option**): `--tools ""`, an empty `--strict-mcp-config`, no setting sources, `--no-session-persistence`. The model has no callable tools at all.
-  - `codex exec`: every Codex feature enabled by default is disabled, read from `codex features list` at runtime. That covers shell and exec, ChatGPT connectors (apps and plugins), code mode, browser and computer use, and memories. It also runs with `--ignore-user-config`, `--ephemeral` and a read-only sandbox. **Caveat:** Codex 0.164 still *lists* "collaboration" (sub-agent) tools that no flag removes. The ones that could act (spawning or directing an agent) fail, because `--ephemeral` sessions can't spawn agents and code mode is off. Every call is also caught by the fail-closed check below.
+  - `codex exec`: every Codex feature enabled by default is disabled, read from `codex features list` at runtime. That covers shell and exec, ChatGPT connectors (apps and plugins), code mode, browser and computer use, and memories. It also runs with `--ignore-user-config`, `--ephemeral` and a read-only sandbox. **Caveat:** Codex 0.164 still *lists* a few tools that no flag removes: "collaboration" (sub-agent) tools, code mode's `exec`, `wait` and `request_user_input`. The ones that could act fail: `--ephemeral` sessions can't spawn agents, and `exec` errors because the code-mode host is disabled. Every call is also caught by the fail-closed check below.
 - **Fail closed (Codex).** Codex logs every tool call it makes, including ones its `--json` output omits. If the log shows any tool call, or the event stream contains anything beyond a plain text answer, that batch's output is thrown away.
-- **Size limits.** Each message is capped at 2,000 characters and each conversation window at 40,000. A chat that fails 3 runs in a row is skipped rather than stalling every run. If the interpreter is unavailable (signed out, offline), the run is retried later and nothing is skipped.
+- **Size limits.** Each message is capped at 2,000 characters and each conversation window at 40,000. A chat that fails 3 runs in a row is skipped rather than stalling every run. If the interpreter is unavailable (signed out, offline, usage limit), the run is retried later: outages never count toward that limit, and nothing is skipped.
 - **Strangers are isolated.** A chat with anyone who isn't in your Contacts is interpreted on its own, and if its output is unusable, only that chat is dropped. Every change must cite messages from its own chat, and closing an item requires a new message. *Residual risk:* chats with saved contacts are batched together, so a contact's message could still steer how the model reads another contact's chat in the same batch.
 - **No forged structure.** Embedded newlines are collapsed everywhere (messages, group names, model output), so text can't forge transcript lines or brief sections. Interpreter output is never logged.
 - **Prompt injection reaches your agent too.** Tool results contain text other people wrote. The tool descriptions and the brief tell agents to treat it as data, but agents like Codex and Claude Code have their own tools (shell, files, web). Keep their approval prompts on, and don't let an agent act on a message's instructions.

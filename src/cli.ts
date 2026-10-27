@@ -8,6 +8,7 @@ import { buildBrief, formatItem } from './brief.ts';
 import { type Config, configPath, INTERPRETERS, type InterpreterName, loadConfig, loadConfigDefaults, paths, saveConfig } from './config.ts';
 import { interpretNow } from './interpret/run.ts';
 import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
+import { Contacts } from './messages/contacts.ts';
 import { Conversations } from './messages/conversations.ts';
 import { APPS, which } from './apps.ts';
 import { bridge, type ServiceHealth, serviceHealth } from './bridge.ts';
@@ -50,7 +51,8 @@ function fdaHelp(): string {
   2. Click +, press ⌘⇧G, paste the path below, press Return, then Open:
      ${serviceNode()}
   3. Make sure its switch is on.
-  Only this one binary needs it. Your apps and terminal don't.`;
+  Only this one binary needs it. Your apps and terminal don't.
+  Note: this is your shared Node, so other Node programs started directly by launchd would get access too.`;
 }
 
 async function doctor(): Promise<void> {
@@ -85,7 +87,7 @@ async function doctor(): Promise<void> {
   for (const app of APPS) {
     if (!app.installed()) console.log(`➖ ${app.name}: not installed`);
     else if (app.registered()) console.log(`✅ ${app.name}: connected. ${app.reach}`);
-    else console.log(`❌ ${app.name}: installed but not connected (run: node src/cli.ts setup)`);
+    else console.log(`➖ ${app.name}: installed, not connected (optional: node src/cli.ts setup --apps ${app.id})`);
   }
 }
 
@@ -169,8 +171,8 @@ async function setup(): Promise<void> {
   console.log(`
 Done. How it fits together:
   Your messages ─► background service on this Mac ─► local bridge ─► ChatGPT / Claude desktop app ─► your agent
-  Nothing listens on the network. Cloud agents (like Dot on your phone) reach the data only through a desktop
-  app running on this Mac, so the Mac needs to be on and awake.
+  Nothing listens on the network. Cloud agents (like Dot on your phone) can only reach the data through a desktop
+  app running on this Mac, so the Mac needs to be on and awake. (Dot via the ChatGPT app is not yet verified.)
 
 Next steps (also in the README, "Connect your agents"):
   • Restart Claude desktop and ChatGPT desktop so they load the new connection.
@@ -231,10 +233,15 @@ function useInterpreter(name: string | undefined): void {
   }
   // Read the raw file so `use` can also repair a config with an invalid interpreter.
   let current: Partial<Config> = {};
-  try {
-    current = JSON.parse(fs.readFileSync(configPath(), 'utf8'));
-  } catch {
-    // Missing or unreadable: start from defaults.
+  if (fs.existsSync(configPath())) {
+    try {
+      current = JSON.parse(fs.readFileSync(configPath(), 'utf8'));
+    } catch {
+      // Never fall back to defaults here: that would silently drop settings like privateContacts.
+      console.log(`${configPath()} isn't valid JSON. Fix it (or delete it to start over), then run this again.`);
+      process.exitCode = 1;
+      return;
+    }
   }
   saveConfig({ ...loadConfigDefaults(), ...current, interpreter: name as InterpreterName });
   console.log(`Interpreter set to ${name}. The background service uses it from its next run.`);

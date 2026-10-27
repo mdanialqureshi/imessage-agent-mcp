@@ -301,9 +301,11 @@ export async function serveSocket(opts: { autoInterpret?: boolean } = {}): Promi
   ensureStateDir();
   const sock = socketPath();
   if (Buffer.byteLength(sock) > 103) throw new Error(`Socket path is too long for macOS: ${sock}`);
-  if (fs.existsSync(sock)) {
-    if (await isListening(sock)) throw new Error('The imessage-agent service is already running.');
-    fs.rmSync(sock); // Left behind by a crash.
+  // lstat, not exists: a dangling symlink here would otherwise redirect where the socket is made.
+  const existing = fs.lstatSync(sock, { throwIfNoEntry: false });
+  if (existing) {
+    if (existing.isSocket() && (await isListening(sock))) throw new Error('The imessage-agent service is already running.');
+    fs.rmSync(sock); // Left behind by a crash or SIGTERM.
   }
   const httpServer = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');

@@ -8,7 +8,7 @@ Everything runs on your Mac. Apps connect by launching the **local bridge**, `no
 
 | Agent | Front door on your Mac | One-time step |
 |---|---|---|
-| **Dot** (ChatGPT) | ChatGPT desktop app (uses the Codex config below) | Dot profile → **Computers** → **Allow access** |
+| **Dot** (ChatGPT) | ChatGPT desktop app (uses the Codex config below; not yet verified) | Dot profile → **Computers** → **Allow access** |
 | **ChatGPT / Codex** on the Mac | ChatGPT desktop app, Codex CLI | none |
 | **Claude** | Claude desktop app | Restart it after `setup` |
 | **Claude Code** | the `claude` CLI | none |
@@ -26,7 +26,7 @@ command = "/opt/homebrew/bin/node"
 args = ["<repo>/src/cli.ts", "connect"]
 ```
 
-Then, in the ChatGPT desktop app: open your Dot's profile → **Computers** → **Your computer** → **Allow access** ([OpenAI docs](https://learn.chatgpt.com/docs/dots/computers-and-apps)). Revoke it there any time.
+Then, in the ChatGPT desktop app, open your Dot's profile → **Computers** → **Your computer** → **Allow access** ([OpenAI docs](https://learn.chatgpt.com/docs/dots/computers-and-apps)). Revoke it there any time. A connected Dot can run local Codex tasks, which load this config. That Dot can call the tools this way is the expected path, but it hasn't been verified yet.
 
 The background interpreter (`codex exec`) runs with `--ignore-user-config`, so it never loads this connection itself.
 

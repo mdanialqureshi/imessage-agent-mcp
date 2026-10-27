@@ -4,7 +4,7 @@
   "description": "MCP server that turns your iMessages into commitments, plans and replies-owed for any AI agent (ChatGPT, Claude, Gemini). Runs locally on your Mac.",
   "main": "src/cli.ts",
   "scripts": {
-    "start": "node src/cli.ts serve --http",
+    "start": "node src/cli.ts serve",
     "doctor": "node src/cli.ts doctor",
     "test": "node --test test/",
     "safety": "node scripts/check-public-safety.mjs",

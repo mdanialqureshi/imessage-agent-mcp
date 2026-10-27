@@ -289,6 +289,8 @@ test('service listens only on a private Unix socket, and the bridge relays MCP t
     await new Promise((r) => service.close(r));
   }
   assert.equal(fs.existsSync(socketPath()), false, 'socket removed on shutdown');
+  const odd = await relay([null, 5, []]);
+  assert.deepEqual(odd.map((r) => r.error?.code), [-32600, -32600, -32600], 'bad input gets an error, never a crash');
   const down = await relay([init]);
   assert.equal(down[0].id, 1);
   assert.equal(down[0].error.message, SERVICE_DOWN, 'apps get a clear message when the service is off');
@@ -309,6 +311,14 @@ test('app registration merges into JSON configs without touching other servers',
   assert.ok(fs.existsSync(`${file}.before-imessage-agent`), 'original backed up');
   app.unregister();
   assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers), ['other']);
+  fs.writeFileSync(file, JSON.stringify({ mcpServers: { [SERVER_NAME]: { command: 'someone-elses-server' } } }));
+  assert.throws(() => app.register(['n', '/repo/src/cli.ts', 'connect']), /unrelated/, "never replaces another tool's server");
+  app.unregister();
+  assert.ok(JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers[SERVER_NAME], "never removes another tool's server");
+  for (const odd of ['[1,2]', 'null', '{"mcpServers":"abc"}']) {
+    fs.writeFileSync(file, odd);
+    assert.throws(() => app.register(['n', '/repo/src/cli.ts', 'connect']), /unexpected shape/, odd);
+  }
   fs.writeFileSync(file, '{ not json');
   assert.throws(() => app.register(['n', 'c', 'connect']), /isn't valid JSON/, 'never overwrites a config it cannot parse');
   assert.equal(fs.readFileSync(file, 'utf8'), '{ not json');
@@ -357,6 +367,21 @@ test('a failing stranger chat is dropped at once; failing contact chats get thre
   const after = Store.open();
   assert.equal(after.getMeta('last_rowid'), '0', 'checkpoint not advanced during an outage');
   after.close();
+
+  // A mid-run outage (first call works, later ones hit a usage limit) never earns strikes.
+  reset({ last_rowid: '0', chat_failures: '{}' });
+  for (let i = 0; i < 4; i++) {
+    let calls = 0;
+    const flaky = async () => {
+      if (calls++ > 0) throw new InterpreterUnavailable('usage limit');
+      return [];
+    };
+    await assert.rejects(interpretNow({ config: loadConfig(), now: NOW, runner: flaky }), /usage limit/);
+  }
+  const flakyStore = Store.open();
+  assert.equal(flakyStore.getMeta('chat_failures'), '{}', 'no chat is skipped because of an outage');
+  assert.equal(flakyStore.getMeta('last_rowid'), '0');
+  flakyStore.close();
 
   reset({ last_rowid: '0', chat_failures: '{}' });
   const runner = async (prompt: string) => {
