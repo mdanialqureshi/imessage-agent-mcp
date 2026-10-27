@@ -11,7 +11,7 @@ import { interpretNow } from './interpret/run.ts';
 import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
 import { Conversations } from './messages/conversations.ts';
-import { READER_LABEL, readerBinary, readerStatus } from './messages/mirror.ts';
+import { compileReader, READER_BUILD, READER_LABEL, readerBinary, readerStatus } from './messages/mirror.ts';
 import { APPS, which } from './apps.ts';
 import { bridge, callTool, type ServiceHealth, serviceHealth } from './bridge.ts';
 import { serveSocket, socketPath } from './server.ts';
@@ -65,7 +65,7 @@ const readerSource = path.join(path.dirname(cliPath), '..', 'helper', 'reader.c'
 function buildReader(): boolean {
   const bin = readerBinary();
   const stamp = `${bin}.sha256`;
-  const hash = createHash('sha256').update(fs.readFileSync(readerSource)).digest('hex');
+  const hash = createHash('sha256').update(fs.readFileSync(readerSource)).update(JSON.stringify(READER_BUILD)).digest('hex');
   if (fs.existsSync(bin) && fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8').trim() === hash) return false;
   if (spawnSync('xcode-select', ['-p'], { stdio: 'ignore' }).status !== 0) {
     throw new Error("its reader is built with Apple's Command Line Tools: run `xcode-select --install`, then setup again");
@@ -73,8 +73,7 @@ function buildReader(): boolean {
   ensureStateDir();
   fs.mkdirSync(path.dirname(bin), { recursive: true, mode: 0o700 });
   const tmp = `${bin}.new`;
-  execFileSync('/usr/bin/cc', ['-O2', '-Wall', '-o', tmp, readerSource, '-lsqlite3'], { stdio: ['ignore', 'pipe', 'pipe'] });
-  execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', READER_LABEL, tmp], { stdio: 'ignore' });
+  compileReader(readerSource, tmp);
   fs.renameSync(tmp, bin);
   fs.writeFileSync(stamp, hash + '\n');
   return true;
@@ -369,7 +368,7 @@ ${body}
 
 const bootout = (file: string) => {
   try {
-    execFileSync('launchctl', ['bootout', `gui/${process.getuid!()}`, file], { stdio: 'ignore' });
+    execFileSync('/bin/launchctl', ['bootout', `gui/${process.getuid!()}`, file], { stdio: 'ignore' });
   } catch {
     // Not loaded.
   }
@@ -381,7 +380,7 @@ function installService(): void {
   for (const [file, content] of [[readerPlistPath, readerPlist()], [plistPath, plist()]]) {
     bootout(file);
     fs.writeFileSync(file, content);
-    execFileSync('launchctl', ['bootstrap', `gui/${process.getuid!()}`, file]);
+    execFileSync('/bin/launchctl', ['bootstrap', `gui/${process.getuid!()}`, file]);
   }
   console.log(`   Installed ${READER_LABEL} and ${LABEL} (logs: ${path.join(paths.stateDir, 'logs')})`);
 }

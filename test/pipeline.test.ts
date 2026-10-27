@@ -496,42 +496,73 @@ test('interpreter defaults to claude and is switchable by config or environment'
 test('the reader copies Messages and Contacts privately, and only into its own folder', { skip: process.platform !== 'darwin' && 'macOS only' }, async () => {
   const { execFileSync, spawnSync } = await import('node:child_process');
   const { DatabaseSync } = await import('node:sqlite');
+  const { compileReader } = await import('../src/messages/mirror.ts');
   const home = path.join(dir, 'reader-home');
   fs.rmSync(home, { recursive: true, force: true });
-  const state = path.join(home, 'Library/Application Support/imessage-agent-mcp');
+  const support = path.join(home, 'Library/Application Support');
+  const state = path.join(support, 'imessage-agent-mcp');
   fs.mkdirSync(path.join(home, 'Library/Messages'), { recursive: true });
   fs.mkdirSync(state, { recursive: true });
   fs.chmodSync(state, 0o700);
-  fs.cpSync(process.env.ADDRESSBOOK_DIR!, path.join(home, 'Library/Application Support/AddressBook'), { recursive: true });
+  fs.cpSync(process.env.ADDRESSBOOK_DIR!, path.join(support, 'AddressBook'), { recursive: true });
   // A live database: WAL mode, rows not yet checkpointed, held open by a writer like Messages.
   const chat = path.join(home, 'Library/Messages/chat.db');
   fs.copyFileSync(process.env.IMESSAGE_DB_PATH!, chat);
   const writer = new DatabaseSync(chat);
   writer.exec('PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE pending(x); INSERT INTO pending VALUES (1), (2);');
   const bin = path.join(home, 'reader');
-  const source = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'helper', 'reader.c');
-  execFileSync('/usr/bin/cc', ['-O2', '-Wall', '-Werror', `-DREADER_HOME="${home}"`, '-o', bin, source, '-lsqlite3']);
-  const run = () => spawnSync(bin, { encoding: 'utf8' }).status;
+  compileReader(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'helper', 'reader.c'), bin, ['-Werror', `-DREADER_HOME="${home}"`]);
+  const run = (env: NodeJS.ProcessEnv = {}) => spawnSync(bin, { encoding: 'utf8', env }).status;
   const status = () => fs.readFileSync(path.join(state, 'reader-status'), 'utf8');
   const mirror = path.join(state, 'mirror');
+  const victim = path.join(home, 'victim');
+  const victimDb = path.join(home, 'victim.db');
   try {
-    assert.equal(run(), 0);
+    // Signed with the hardened runtime, so an injected library never runs inside it.
+    assert.match(spawnSync('/usr/bin/codesign', ['-dv', bin], { encoding: 'utf8' }).stderr, /flags=0x\w+\([^)]*runtime/);
+    const marker = path.join(home, 'injected');
+    const lib = path.join(home, 'inject.dylib');
+    fs.writeFileSync(`${lib}.c`, `#include <stdio.h>\n__attribute__((constructor)) static void f(void) { FILE *f = fopen("${marker}", "w"); if (f) fclose(f); }\n`);
+    execFileSync('/usr/bin/cc', ['-dynamiclib', '-o', lib, `${lib}.c`]);
+
+    assert.equal(run({ DYLD_INSERT_LIBRARIES: lib }), 0);
+    assert.equal(fs.existsSync(marker), false, 'injected code must not run in the reader');
     assert.match(status(), /^ok \d+\n$/);
-    const copy = new DatabaseSync(path.join(mirror, 'chat.db'), { readOnly: true });
+    const files = (fs.readdirSync(mirror, { recursive: true }) as string[]).sort();
+    assert.ok(files.includes('chat.db') && files.some((f) => f.endsWith('AddressBook-v22.abcddb')), 'Messages and Contacts are copied');
+    for (const f of files) {
+      const st = fs.statSync(path.join(mirror, f));
+      assert.equal(st.mode & 0o777, st.isDirectory() ? 0o700 : 0o600, `${f} is private`);
+      assert.doesNotMatch(f, /-shm$/);
+    }
+    const copy = new DatabaseSync(path.join(mirror, 'chat.db')); // Read-write, as the service opens it, to apply the WAL.
     assert.equal(copy.prepare('SELECT count(*) AS n FROM pending').get()!.n, 2, 'rows still in the WAL are copied');
     const live = ChatDb.open();
     assert.equal(copy.prepare('SELECT max(ROWID) AS n FROM message').get()!.n, live.maxRowid());
     live.close();
     copy.close();
-    const files = fs.readdirSync(mirror, { recursive: true }) as string[];
-    assert.ok(files.some((f) => f.endsWith('AddressBook-v22.abcddb')), 'contacts are copied');
-    for (const f of files) {
-      const st = fs.statSync(path.join(mirror, f));
-      assert.equal(st.mode & 0o777, st.isDirectory() ? 0o700 : 0o600, `${f} is private`);
-      assert.doesNotMatch(f, /-(wal|shm)$/, 'copies are self-contained');
-    }
     assert.equal(run(), 0, 'a second run swaps in a fresh copy');
     assert.deepEqual(fs.readdirSync(state).filter((n) => n.startsWith('mirror')), ['mirror']);
+
+    // Links planted in the state folder (anything running as the user can write there) are never followed.
+    fs.writeFileSync(victim, 'keep me\n');
+    fs.chmodSync(victim, 0o644);
+    const vdb = new DatabaseSync(victimDb);
+    vdb.exec('PRAGMA journal_mode=WAL; CREATE TABLE t(x)');
+    vdb.close();
+    fs.symlinkSync(victim, path.join(state, 'reader-status.tmp'));
+    assert.equal(run(), 0);
+    fs.rmSync(path.join(state, 'reader-status.tmp'), { force: true });
+    fs.linkSync(victim, path.join(state, 'reader-status.tmp'));
+    assert.equal(run(), 0);
+    fs.rmSync(mirror, { recursive: true });
+    fs.symlinkSync(home, mirror);
+    assert.equal(run(), 0);
+    assert.equal(fs.readFileSync(victim, 'utf8'), 'keep me\n', 'never written through a link');
+    assert.equal(fs.statSync(victim).mode & 0o777, 0o644, 'never chmodded through a link');
+    assert.equal(new DatabaseSync(victimDb, { readOnly: true }).prepare('PRAGMA journal_mode').get()!.journal_mode, 'wal');
+    assert.ok(fs.existsSync(victimDb) && !fs.lstatSync(mirror).isSymbolicLink(), 'a planted mirror link is replaced, not followed');
+    assert.match(status(), /^ok \d+\n$/);
 
     fs.renameSync(chat, `${chat}.away`);
     assert.equal(run(), 1, 'fails when Messages is unreadable');
@@ -545,6 +576,11 @@ test('the reader copies Messages and Contacts privately, and only into its own f
     fs.renameSync(state, `${state}-real`);
     fs.symlinkSync(`${state}-real`, state);
     assert.equal(run(), 1, 'refuses a symlinked folder');
+    fs.rmSync(state);
+    fs.renameSync(`${state}-real`, state);
+    fs.renameSync(support, `${support}-real`);
+    fs.symlinkSync(`${support}-real`, support);
+    assert.equal(run(), 1, 'refuses a link anywhere on the way to the folder');
   } finally {
     writer.close();
   }

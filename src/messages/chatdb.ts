@@ -95,7 +95,7 @@ export class ChatDb {
    */
   static open(source = paths.chatDb): ChatDb {
     try {
-      const db = new DatabaseSync(source, { readOnly: true });
+      const db = new DatabaseSync(source, { readOnly: !paths.mirror });
       db.prepare('SELECT 1 FROM message LIMIT 1').get();
       return new ChatDb(db);
     } catch {

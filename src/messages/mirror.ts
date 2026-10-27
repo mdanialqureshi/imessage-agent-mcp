@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { paths } from '../config.ts';
@@ -14,6 +14,22 @@ export const usingMirror = () => process.env.IMESSAGE_AGENT_MIRROR === '1';
 
 /** Built by setup. Rebuilding changes its signature, so macOS asks for access again. */
 export const readerBinary = () => path.join(paths.stateDir, 'bin', 'imessage-agent-reader');
+
+/**
+ * How the reader is built and signed. The hardened runtime is essential: without it, anything
+ * running as the user could inject a library into the reader and inherit its Full Disk Access.
+ * Part of setup's rebuild check, so changing it rebuilds existing installs.
+ */
+export const READER_BUILD = {
+  cc: ['-O2', '-Wall', '-lsqlite3'],
+  codesign: ['--force', '--sign', '-', '--options', 'runtime', '--identifier', READER_LABEL],
+};
+
+/** Compiles and signs the reader to `out`. Tests pass `-DREADER_HOME=…` to aim it at a fake home. */
+export function compileReader(source: string, out: string, defines: string[] = []): void {
+  execFileSync('/usr/bin/cc', [...defines, ...READER_BUILD.cc, '-o', out, source], { stdio: ['ignore', 'pipe', 'pipe'] });
+  execFileSync('/usr/bin/codesign', [...READER_BUILD.codesign, out], { stdio: 'ignore' });
+}
 
 export interface ReaderStatus {
   ok: boolean;
@@ -48,7 +64,9 @@ export function mirrorProblem(status: ReaderStatus | null): string | null {
 }
 
 const kickstart = () =>
-  new Promise<void>((resolve) => execFile('launchctl', ['kickstart', `gui/${process.getuid!()}/${READER_LABEL}`], () => resolve()));
+  new Promise<void>((resolve) =>
+    execFile('/bin/launchctl', ['kickstart', `gui/${process.getuid!()}/${READER_LABEL}`], { timeout: 5000 }, () => resolve()),
+  );
 
 let inFlight: Promise<ReaderStatus | null> | null = null;
 

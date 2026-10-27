@@ -41,7 +41,7 @@ export class Contacts {
     const contacts = new Contacts();
     for (const file of addressBookFiles()) {
       try {
-        const db = new DatabaseSync(file, { readOnly: true });
+        const db = new DatabaseSync(file, { readOnly: !paths.mirror }); // The reader's copies need their WAL applied.
         const people = db
           .prepare('SELECT Z_PK AS id, ZFIRSTNAME AS first, ZLASTNAME AS last, ZNICKNAME AS nick, ZORGANIZATION AS org FROM ZABCDRECORD')
           .all() as Record<string, string | null>[];

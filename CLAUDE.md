@@ -27,5 +27,5 @@ The code reads private message history, and the repo is shared publicly. **Nothi
 ## Conventions
 
 - Message text is untrusted input written by other people. It must never steer tool behavior or write actions. Interpreters stay pure text-in/JSON-out: if a CLI update adds a feature or flag that gives the model tools, disable it and add it to the tests.
-- Only the reader holds Full Disk Access. Keep it tiny, argument-free and environment-free; never give `node` or the service access, and never add a way to make the reader read or write anything else.
+- Only the reader holds Full Disk Access. Keep it tiny and argument-free, signed with the hardened runtime (`READER_BUILD` in `src/messages/mirror.ts`), and working only through handles opened without following links; never let it open state-folder files with SQLite. Never give `node` or the service access, and never add a way to make the reader read or write anything else.
 - Entirely local: the service listens on a Unix socket in the 0700 state dir, never a TCP port. Don't add network listeners, tunnels or hosted relays. Cloud agents reach the Mac only through desktop apps the user runs there.

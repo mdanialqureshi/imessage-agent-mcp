@@ -49,6 +49,8 @@ export const paths = {
     process.env.ADDRESSBOOK_DIR ??
     (mirror ? path.join(mirror, 'AddressBook') : path.join(os.homedir(), 'Library/Application Support/AddressBook')),
   stateDir,
+  /** Set in the service: the reader's private copies, opened read-write so SQLite applies their WAL. */
+  mirror,
 };
 
 export function configPath(): string {

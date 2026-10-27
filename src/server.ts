@@ -44,9 +44,9 @@ function withStore<T>(fn: (store: Store) => T): T {
 }
 
 /** In the service, refreshes the reader's copy first; throws a message meant for the agent. */
-async function readable(): Promise<void> {
+async function readable(waitMs?: number): Promise<void> {
   if (!usingMirror()) return;
-  const problem = mirrorProblem(await freshMirror());
+  const problem = mirrorProblem(await freshMirror({ waitMs }));
   if (problem) throw new Error(problem);
 }
 
@@ -281,7 +281,7 @@ export function socketPath(): string {
 /** What the service itself can read; only counts, never content. */
 async function access(): Promise<{ canReadMessages: boolean; messages: number; contacts: number }> {
   try {
-    await readable();
+    await readable(8_000); // Well inside the 15s health check timeout.
     const db = ChatDb.open();
     const messages = db.maxRowid();
     db.close();
