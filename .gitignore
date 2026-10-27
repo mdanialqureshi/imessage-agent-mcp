@@ -15,5 +15,9 @@ logs/
 .env
 .env.*
 test/.tmp/
+http-token
+interpret.lock
+snapshot*/
+*.storedata
 
 .DS_Store

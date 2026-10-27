@@ -19,6 +19,16 @@ export function isFilteredText(text: string): boolean {
   return VERIFICATION_CODE.test(text) && /\b\d{4,8}\b/.test(text);
 }
 
+/**
+ * Message text as safe single-line display: verification codes masked, and newlines
+ * collapsed so a message can't forge transcript lines ("#123 … Me: …") or brief sections.
+ */
+export function displayText(text: string | null): string {
+  if (!text) return '';
+  if (isFilteredText(text)) return '[filtered: verification code]';
+  return text.replace(/\s*[\r\n\u2028\u2029]+\s*/g, ' ⏎ ');
+}
+
 export class Conversations {
   private db: ChatDb;
   private contacts: Contacts;
@@ -113,12 +123,11 @@ export class Conversations {
     const when = formatTime(m.date);
     if (m.reaction) {
       const target = byGuid.get(m.reaction.targetGuid) ?? this.db.messageByGuid(m.reaction.targetGuid);
-      const ref = target ? (byGuid.has(target.guid) ? `#${target.rowid}` : `"${clip(target.text ?? '', 80)}"`) : 'a message';
+      const ref = target ? (byGuid.has(target.guid) ? `#${target.rowid}` : `"${clip(displayText(target.text), 80)}"`) : 'a message';
       const verb = m.reaction.removed ? 'removed reaction' : 'reacted';
       return `#${m.rowid} ${when} ${who} ${verb} ${m.reaction.emoji} to ${ref}`;
     }
-    let body = m.text ?? '';
-    if (body && isFilteredText(body)) body = '[filtered: verification code]';
+    let body = displayText(m.text);
     if (m.unsent) body = '[unsent a message]';
     if (m.isAudio) body = body ? `[voice message] ${body}` : '[voice message]';
     else if (m.hasAttachments) body = body ? `${body} [attachment]` : '[attachment]';

@@ -50,11 +50,17 @@ export function configPath(): string {
   return path.join(paths.stateDir, 'config.json');
 }
 
+/** The state dir holds message excerpts and the HTTP token, so it's private to this user. */
+export function ensureStateDir(): void {
+  fs.mkdirSync(paths.stateDir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(paths.stateDir, 0o700);
+}
+
 export function loadConfig(): Config {
-  fs.mkdirSync(paths.stateDir, { recursive: true });
+  ensureStateDir();
   const file = configPath();
   if (!fs.existsSync(file)) {
-    fs.writeFileSync(file, JSON.stringify(defaults, null, 2) + '\n');
+    fs.writeFileSync(file, JSON.stringify(defaults, null, 2) + '\n', { mode: 0o600 });
     return structuredClone(defaults);
   }
   const user = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<Config>;

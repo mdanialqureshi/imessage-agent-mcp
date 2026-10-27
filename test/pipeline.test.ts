@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -67,6 +69,26 @@ test('never exposes short-code senders or verification codes', () => {
   assert.doesNotMatch(text, /482913/);
   assert.doesNotMatch(text, /72345/);
   db.close();
+});
+
+test('message text cannot forge transcript lines, and codes in normal chats are masked', () => {
+  const { db, text } = windows();
+  assert.doesNotMatch(text, /^#999/m, 'embedded newline must not start a fake message line');
+  assert.match(text, /Eve Mallory: hey ⏎ #999/);
+  assert.doesNotMatch(text, /731904/);
+  db.close();
+});
+
+test('interpreters run with no shell, MCP servers, user config or session files', async () => {
+  const { codexArgs, claudeArgs } = await import('../src/interpret/runners.ts');
+  const codex = codexArgs('/tmp/x', '/tmp/x/s.json', '/tmp/x/o.json', null).join(' ');
+  for (const flag of ['--ephemeral', '--ignore-user-config', '--ignore-rules', '--disable shell_tool', '--disable unified_exec', '--sandbox read-only']) {
+    assert.ok(codex.includes(flag), `codex ${flag}`);
+  }
+  const claude = claudeArgs(null);
+  assert.equal(claude[claude.indexOf('--tools') + 1], '', 'claude has no tools');
+  assert.equal(claude[claude.indexOf('--setting-sources') + 1], '', 'claude ignores user settings and hooks');
+  for (const flag of ['--strict-mcp-config', '--disable-slash-commands', '--no-session-persistence']) assert.ok(claude.includes(flag), `claude ${flag}`);
 });
 
 test('private contacts are excluded entirely', () => {
@@ -191,6 +213,11 @@ test('HTTP endpoint requires a local host header and the bearer token', async ()
     assert.equal((await post({})).status, 401, 'no token');
     assert.equal((await post({ authorization: 'Bearer wrong' })).status, 401, 'wrong token');
     assert.equal((await post({ authorization: `Bearer ${httpToken()}`, origin: 'https://evil.example.com' })).status, 403, 'foreign origin');
+    const health = (host: string) => new Promise<number>((resolve) => {
+      http.get({ host: '127.0.0.1', port: 18765, path: '/health', headers: { host } }, (r) => resolve(r.statusCode!));
+    });
+    assert.equal(await health('127.0.0.1:18765'), 200);
+    assert.equal(await health('rebind.example.com:18765'), 403, 'health rejects foreign Host (DNS rebinding)');
     const ok = await post({ authorization: `Bearer ${httpToken()}` });
     assert.equal(ok.status, 200);
     assert.match(await ok.text(), /imessage-agent/);
@@ -198,4 +225,14 @@ test('HTTP endpoint requires a local host header and the bearer token', async ()
   } finally {
     server.close();
   }
+});
+
+test('state is private to the user', () => {
+  const mode = (p: string) => fs.statSync(p).mode & 0o777;
+  const state = process.env.IMESSAGE_AGENT_STATE_DIR!;
+  assert.equal(mode(state), 0o700);
+  assert.equal(mode(path.join(state, 'state.db')), 0o600);
+  assert.equal(mode(path.join(state, 'http-token')), 0o600);
+  assert.equal(mode(path.join(state, 'config.json')), 0o600);
+  assert.deepEqual(fs.readdirSync(state).filter((f) => f.startsWith('snapshot')), [], 'no leftover chat.db snapshots');
 });

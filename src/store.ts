@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { paths } from './config.ts';
+import { ensureStateDir, paths } from './config.ts';
 
 export const KINDS = [
   'plan',
@@ -129,7 +130,11 @@ export class Store {
   private db: DatabaseSync;
 
   static open(file = path.join(paths.stateDir, 'state.db')): Store {
-    return new Store(new DatabaseSync(file));
+    ensureStateDir();
+    const store = new Store(new DatabaseSync(file));
+    // SQLite creates the -wal/-shm files with the main file's permissions.
+    fs.chmodSync(file, 0o600);
+    return store;
   }
 
   constructor(db: DatabaseSync) {

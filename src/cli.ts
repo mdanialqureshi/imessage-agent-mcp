@@ -85,11 +85,32 @@ function exportConversations(): void {
   db.close();
 }
 
+const xml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/** Absolute path of a CLI on the current PATH, pinned into the service so PATH lookups can't be hijacked. */
+function which(name: string): string | null {
+  try {
+    // Not realpath'd: self-updating CLIs keep a stable symlink while the versioned binary moves.
+    return execFileSync('/usr/bin/which', [name], { encoding: 'utf8' }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 function plist(): string {
+  const config = loadConfig();
   const logDir = path.join(paths.stateDir, 'logs');
-  fs.mkdirSync(logDir, { recursive: true });
-  const envPath = [path.dirname(process.execPath), '/opt/homebrew/bin', '/usr/local/bin', path.join(os.homedir(), '.local/bin'), '/usr/bin', '/bin'].join(':');
-  const args = [process.execPath, cliPath, 'serve', '--http'].map((a) => `    <string>${a}</string>`).join('\n');
+  fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
+  const interpreterBin = which(config.interpreter);
+  if (!interpreterBin) throw new Error(`${config.interpreter} not found on PATH; install and sign in first.`);
+  // The CLIs need node (and git for codex) on PATH; system dirs only besides node's own.
+  const env: Record<string, string> = {
+    PATH: [path.dirname(fs.realpathSync(process.execPath)), '/usr/bin', '/bin'].join(':'),
+    [`IMESSAGE_AGENT_${config.interpreter.toUpperCase()}_BIN`]: interpreterBin,
+  };
+  const envXml = Object.entries(env).map(([k, v]) => `<key>${xml(k)}</key><string>${xml(v)}</string>`).join('');
+  const args = [process.execPath, cliPath, 'serve', '--http'].map((a) => `    <string>${xml(a)}</string>`).join('\n');
+  const log = xml(path.join(logDir, 'service.log'));
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -100,11 +121,12 @@ function plist(): string {
 ${args}
   </array>
   <key>EnvironmentVariables</key>
-  <dict><key>PATH</key><string>${envPath}</string></dict>
+  <dict>${envXml}</dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>${path.join(logDir, 'service.log')}</string>
-  <key>StandardErrorPath</key><string>${path.join(logDir, 'service.log')}</string>
+  <key>Umask</key><integer>63</integer>
+  <key>StandardOutPath</key><string>${log}</string>
+  <key>StandardErrorPath</key><string>${log}</string>
 </dict>
 </plist>
 `;

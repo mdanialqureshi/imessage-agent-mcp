@@ -8,7 +8,7 @@
     "doctor": "node src/cli.ts doctor",
     "test": "node --test test/",
     "safety": "node scripts/check-public-safety.mjs",
-    "safety:all": "node scripts/check-public-safety.mjs --all"
+    "safety:all": "node scripts/check-public-safety.mjs --all --check-authors"
   },
   "keywords": [
     "mcp",

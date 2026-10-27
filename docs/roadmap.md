@@ -29,6 +29,10 @@
 - A test that a Dot's scheduled run can call `get_brief` and notify the user
 - Separate tool exposure for remote clients (e.g. raw `get_conversation` and `search_messages` off by default)
 
+### Hardening
+- A dedicated, single-purpose helper binary holds Full Disk Access instead of `node`, so other Node scripts can't inherit it
+- Optional Keychain storage for the HTTP token
+
 ### M4: assistant layer
 - Person profiles: last contact, usual cadence, topics, open items both ways → `get_person`
 - Drifting-friend nudges, weekly review tool

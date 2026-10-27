@@ -11,7 +11,7 @@ import { type Config, loadConfig, paths } from './config.ts';
 import { interpretNow, type RunResult } from './interpret/run.ts';
 import { ChatDb, type Message } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
-import { Conversations, formatTime, isFilteredText } from './messages/conversations.ts';
+import { Conversations, displayText, formatTime, isFilteredText } from './messages/conversations.ts';
 import { KINDS, STATUSES, Store } from './store.ts';
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, openWorldHint: false } as const;
@@ -47,7 +47,7 @@ function withMessages<T>(config: Config, fn: (db: ChatDb, conv: Conversations) =
 }
 
 function renderMessage(conv: Conversations, m: Message): string {
-  const body = m.reaction ? `reacted ${m.reaction.emoji}` : m.text && isFilteredText(m.text) ? '[filtered]' : (m.text ?? '[attachment]');
+  const body = m.reaction ? `reacted ${m.reaction.emoji}` : displayText(m.text) || '[attachment]';
   return `${formatTime(m.date)} ${conv.sender(m)}: ${body}`;
 }
 
@@ -253,10 +253,6 @@ export async function serveStdio(): Promise<void> {
   await createServer(config).connect(new StdioServerTransport());
 }
 
-/**
- * Streamable HTTP on localhost, stateless (a fresh server per request). Also runs
- * interpretation every `autoInterpretMinutes` so results are ready when agents ask.
- */
 /** Bearer token for the HTTP endpoint, created on first use and readable only by this user. */
 export function httpToken(): string {
   const file = path.join(paths.stateDir, 'http-token');
@@ -269,19 +265,23 @@ export function httpToken(): string {
  * Full Disk Access, so without this any process or web page (via DNS rebinding) could
  * read messages through it.
  */
-function authorize(req: http.IncomingMessage, config: Config, token: string): string | null {
+function authorize(req: http.IncomingMessage, config: Config, token: string | null): string | null {
   const port = config.http.port;
   const localHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
   if (!localHosts.has(req.headers.host ?? '')) return 'host not allowed';
   const origin = req.headers.origin;
   if (origin && !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(origin)) return 'origin not allowed';
-  if (!config.http.requireToken) return null;
+  if (token === null || !config.http.requireToken) return null;
   const given = Buffer.from((req.headers.authorization ?? '').replace(/^Bearer\s+/i, ''));
   const expected = Buffer.from(token);
   if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return 'missing or invalid bearer token';
   return null;
 }
 
+/**
+ * Streamable HTTP on localhost, stateless (a fresh server per request). Also runs
+ * interpretation every `autoInterpretMinutes` so results are ready when agents ask.
+ */
 export async function serveHttp(opts: { autoInterpret?: boolean; config?: Config } = {}): Promise<http.Server> {
   const config = opts.config ?? loadConfig();
   if (!['127.0.0.1', 'localhost', '::1'].includes(config.http.host)) {
@@ -290,18 +290,19 @@ export async function serveHttp(opts: { autoInterpret?: boolean; config?: Config
   const token = httpToken();
   const httpServer = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
-    if (url.pathname === '/health') {
-      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true }));
-      return;
-    }
-    if (url.pathname !== '/mcp') {
+    if (url.pathname !== '/mcp' && url.pathname !== '/health') {
       res.writeHead(404).end();
       return;
     }
-    const denied = authorize(req, config, token);
+    // /health still requires a local Host/Origin, so web pages can't probe for the service.
+    const denied = authorize(req, config, url.pathname === '/health' ? null : token);
     if (denied) {
       res.writeHead(denied.includes('token') ? 401 : 403, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: denied }));
+      return;
+    }
+    if (url.pathname === '/health') {
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true }));
       return;
     }
     const server = createServer(config);

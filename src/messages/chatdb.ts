@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { paths } from '../config.ts';
+import { ensureStateDir, paths } from '../config.ts';
 
 /** Seconds between the Unix epoch and Apple's 2001-01-01 epoch. */
 const APPLE_EPOCH_MS = 978307200000;
@@ -77,6 +77,7 @@ export class ChatDb {
   private db: DatabaseSync;
   private columns: Set<string>;
   private chatCache = new Map<number, Chat>();
+  private cleanupDir: string | null = null;
 
   /**
    * Opens chat.db read-only. WAL mode lets us read while Messages.app writes; if the
@@ -99,17 +100,22 @@ export class ChatDb {
     }
   }
 
+  /** A private copy of chat.db, deleted again on close(). */
   static openSnapshot(source = paths.chatDb): ChatDb {
-    const snapshotDir = path.join(paths.stateDir, 'snapshot');
-    fs.mkdirSync(snapshotDir, { recursive: true });
+    ensureStateDir();
+    const snapshotDir = fs.mkdtempSync(path.join(paths.stateDir, 'snapshot-'));
     const target = path.join(snapshotDir, 'chat.db');
     for (const suffix of ['', '-wal', '-shm']) {
       const from = source + suffix;
       const to = target + suffix;
-      if (fs.existsSync(from)) fs.copyFileSync(from, to);
-      else fs.rmSync(to, { force: true });
+      if (fs.existsSync(from)) {
+        fs.copyFileSync(from, to);
+        fs.chmodSync(to, 0o600);
+      }
     }
-    return new ChatDb(new DatabaseSync(target));
+    const db = new ChatDb(new DatabaseSync(target));
+    db.cleanupDir = snapshotDir;
+    return db;
   }
 
   constructor(db: DatabaseSync) {
@@ -120,6 +126,7 @@ export class ChatDb {
 
   close(): void {
     this.db.close();
+    if (this.cleanupDir) fs.rmSync(this.cleanupDir, { recursive: true, force: true });
   }
 
   private optional(column: string, expr = `m.${column}`, fallback = 'NULL'): string {

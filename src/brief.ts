@@ -21,15 +21,17 @@ function whenLabel(i: Item): string {
   return `${day}${time}${i.whenText ? ` ("${i.whenText}")` : ''}`;
 }
 
+const oneLine = (s: string) => s.replace(/\s*[\r\n\u2028\u2029]+\s*/g, ' ');
+
 export function formatItem(i: Item, opts: { since?: string; evidence?: number } = {}): string {
   const isNew = opts.since && i.createdAt > opts.since ? '🆕 ' : '';
   const meta = [i.kind, whenLabel(i), i.strength !== 'firm' ? i.strength : '', `${Math.round(i.confidence * 100)}%`]
     .filter(Boolean)
     .join(' · ');
-  const lines = [`- ${isNew}**${i.title}** — ${i.chatLabel} · ${meta} · \`${i.id}\``];
-  if (i.detail) lines.push(`  ${i.detail}`);
+  const lines = [`- ${isNew}**${oneLine(i.title)}** — ${oneLine(i.chatLabel)} · ${meta} · \`${i.id}\``];
+  if (i.detail) lines.push(`  ${oneLine(i.detail)}`);
   if (i.missingDetails.length) lines.push(`  Missing: ${i.missingDetails.join(', ')}`);
-  for (const e of i.evidence.slice(-(opts.evidence ?? 2))) lines.push(`  > ${e.from} (${e.date}): ${e.text}`);
+  for (const e of i.evidence.slice(-(opts.evidence ?? 2))) lines.push(`  > ${oneLine(e.from)} (${e.date}): ${oneLine(e.text)}`);
   if (i.suggestedAction !== 'none') lines.push(`  Suggested: ${i.suggestedAction.replace('_', ' ')}`);
   return lines.join('\n');
 }

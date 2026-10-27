@@ -117,9 +117,14 @@ Read-only tools carry `readOnlyHint`, so agents that limit background work to re
 - **Read-only.** `chat.db` is opened read-only (or as a snapshot copy). Nothing is ever sent, edited or deleted.
 - **Filtered before any model sees it.** Short-code senders, verification-code messages and your `privateContacts` are dropped on the Mac.
 - **Local state only**, in `~/Library/Application Support/imessage-agent-mcp/`: items, short evidence quotes, run history.
-- **The HTTP endpoint is loopback-only and authenticated.** It refuses to bind to anything but localhost. It rejects requests whose `Host` or `Origin` isn't local (protecting against DNS rebinding), and it requires a bearer token (`node src/cli.ts token`, stored with `0600` permissions). Without this, any local process or web page could read your messages through a service that holds Full Disk Access.
-- **Interpretation runs sandboxed.** The interpreter CLI runs in an empty temp directory with a read-only sandboxed `codex exec` (or `claude -p` with tools disabled), and it must return a strict JSON schema.
-- **Prompt injection.** Messages are written by other people. Tool descriptions and the brief tell agents to treat message text as data. The server has no tool that sends messages, and the only write is changing an item's status. Your agent still decides what to do with its own tools, so keep it asking before acting.
+- **The HTTP endpoint is loopback-only and authenticated.** It refuses to bind to anything but localhost. It rejects requests whose `Host` or `Origin` isn't local, which blocks web pages using DNS rebinding. It requires a bearer token (`node src/cli.ts token`), and the state directory is `0700`, with files `0600`.
+- **The interpreter is a pure text-in, JSON-out call.** Message text is attacker-controlled, so the interpreter gets no tools:
+  - `codex exec`: shell and exec tools disabled, `--ignore-user-config` (so none of your MCP servers or hooks), `--ephemeral`, read-only sandbox.
+  - `claude -p`: `--tools ""`, an empty `--strict-mcp-config`, no setting sources, `--no-session-persistence`.
+
+  Embedded newlines are collapsed, so a message can't forge transcript lines or brief sections. Interpreter output is never logged, because it can echo message text.
+- **Prompt injection.** Messages are written by other people. The interpreter prompt, tool descriptions and the brief all tell models to treat message text as data. The server has no tool that sends messages, and the only write is changing an item's status. Your agent still decides what to do with its own tools, so keep it asking before acting.
+- **Threat model.** This protects against other people (via the messages they send you), web pages, and other macOS users. It **can't** protect against malware already running as *your* user. Such malware could read the token and state files, or reuse the `node` binary you gave Full Disk Access to. A dedicated single-purpose helper binary is on the [roadmap](docs/roadmap.md).
 - **What leaves your Mac:** conversation windows go to your interpreter's provider (OpenAI or Anthropic, under your plan's terms), and whatever your connected agents request goes to them. Nothing else.
 
 ## Limitations

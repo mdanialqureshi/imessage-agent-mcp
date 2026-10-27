@@ -3,7 +3,7 @@ import path from 'node:path';
 import { type Config, loadConfig, paths } from '../config.ts';
 import { ChatDb, type Message } from '../messages/chatdb.ts';
 import { Contacts } from '../messages/contacts.ts';
-import { Conversations, formatTime, type Window } from '../messages/conversations.ts';
+import { Conversations, displayText, formatTime, type Window } from '../messages/conversations.ts';
 import { type Evidence, type ItemFields, KINDS, type Kind, Store } from '../store.ts';
 import { buildPrompt, type PromptChat } from './prompt.ts';
 import { interpreter, type RawOp } from './runners.ts';
@@ -67,7 +67,7 @@ function toFields(op: RawOp, w: Window, conv: Conversations): ItemFields {
       rowid: m.rowid,
       from: conv.sender(m),
       date: formatTime(m.date),
-      text: m.reaction ? `reacted ${m.reaction.emoji}` : (m.text ?? ''),
+      text: m.reaction ? `reacted ${m.reaction.emoji}` : displayText(m.text),
     }));
   return {
     kind: op.kind as Kind,

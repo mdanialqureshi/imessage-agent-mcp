@@ -13,11 +13,12 @@ This repository is public and the software reads private iMessage history. One l
 2. **Run the scanner:** `npm run safety`. It checks staged files for:
    - API keys and tokens (OpenAI, Anthropic, GitHub, AWS, Slack, Google, private keys, JWTs, bearer tokens)
    - email addresses outside `example.com`/`example.org`/`users.noreply.github.com`
-   - phone numbers that aren't fictional `555-01xx`-style numbers
+   - phone numbers outside the fictional `555-0100`–`555-0199` range, including international ones
    - absolute home paths with a real username (`/Users/<name>/`)
    - forbidden files (`*.db`, `*.sqlite`, `.env*`, `config.json`, logs, exports, `.abcddb`)
 
-   Fix every hit. Use an allowlist pragma (`safety-allow`) only for deliberate, reviewed fakes.
+   Fix every hit. There is no allowlist pragma. Use only reserved fakes: `example.com` emails and `555-01xx` numbers.
+   CI also runs `npm run safety:all` with `--check-authors` on every push, so `--no-verify` doesn't skip it.
 3. **Fixtures and examples are synthetic.** Never paste real conversation snippets, contact names, phone numbers or the user's own details. Not even "just for a test".
 
 ## Before every push: independent security audit
