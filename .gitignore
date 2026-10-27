@@ -1,0 +1,19 @@
+node_modules/
+
+# Never commit message data, state, or local config
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.abcddb
+config.json
+exports/
+*.export.txt
+logs/
+*.log
+.env
+.env.*
+test/.tmp/
+
+.DS_Store

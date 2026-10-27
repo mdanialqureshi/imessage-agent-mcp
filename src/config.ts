@@ -1,0 +1,62 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+export type InterpreterName = 'codex' | 'claude';
+
+export interface Config {
+  /** Which subscription CLI interprets conversations. */
+  interpreter: InterpreterName;
+  /** Optional model override passed to the interpreter CLI. */
+  model: string | null;
+  /** How far back the very first run looks. */
+  firstRunLookbackDays: number;
+  /** Messages of earlier context shown before the new ones in each chat. */
+  contextMessages: number;
+  /** Only flag an unanswered message as `reply_owed` after this many hours. */
+  replyOwedAfterHours: number;
+  /** Background interpretation interval while `serve --http` is running. */
+  autoInterpretMinutes: number;
+  /** Names, phone numbers or emails that are never read or sent to a model. */
+  privateContacts: string[];
+  /** Skip chats with SMS short codes (banks, 2FA, deliveries). */
+  skipShortCodes: boolean;
+  /** Localhost HTTP endpoint. `requireToken` should only be disabled for debugging. */
+  http: { host: string; port: number; requireToken: boolean };
+}
+
+const defaults: Config = {
+  interpreter: 'codex',
+  model: null,
+  firstRunLookbackDays: 7,
+  contextMessages: 25,
+  replyOwedAfterHours: 4,
+  autoInterpretMinutes: 120,
+  privateContacts: [],
+  skipShortCodes: true,
+  http: { host: '127.0.0.1', port: 8765, requireToken: true },
+};
+
+export const paths = {
+  chatDb: process.env.IMESSAGE_DB_PATH ?? path.join(os.homedir(), 'Library/Messages/chat.db'),
+  addressBookDir:
+    process.env.ADDRESSBOOK_DIR ?? path.join(os.homedir(), 'Library/Application Support/AddressBook'),
+  stateDir:
+    process.env.IMESSAGE_AGENT_STATE_DIR ??
+    path.join(os.homedir(), 'Library/Application Support/imessage-agent-mcp'),
+};
+
+export function configPath(): string {
+  return path.join(paths.stateDir, 'config.json');
+}
+
+export function loadConfig(): Config {
+  fs.mkdirSync(paths.stateDir, { recursive: true });
+  const file = configPath();
+  if (!fs.existsSync(file)) {
+    fs.writeFileSync(file, JSON.stringify(defaults, null, 2) + '\n');
+    return structuredClone(defaults);
+  }
+  const user = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<Config>;
+  return { ...defaults, ...user, http: { ...defaults.http, ...user.http } };
+}
