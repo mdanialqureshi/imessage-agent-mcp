@@ -10,9 +10,11 @@
 //   injected libraries are ignored and debuggers can't attach.
 // - It reaches the state folder one component at a time without following links, then does
 //   everything relative to that handle. It never follows a link in the folder or opens one of
-//   its files with SQLite, and only changes a file after checking it's its own.
-// - A deadline (alarm) ends it if anything there makes it hang, releasing its read lock on
-//   the live Messages database.
+//   its files with SQLite. It only modifies a file after checking it's its own; leftovers are
+//   deleted without following links.
+// - It holds its read lock on the live Messages database only while cloning, and a deadline
+//   (alarm) ends it if it stalls. (A process that can pause it, e.g. with SIGSTOP, can still
+//   delay it; such a process could pause Messages itself just as well.)
 //
 // launchd runs it as its own job (com.imessage-agent-mcp.reader), so macOS attributes its
 // file access to this binary alone. Built by `node src/cli.ts setup`.
@@ -91,20 +93,24 @@ static int remove_tree(int dir, const char *name, int depth) {
   return unlinkat(dir, name, AT_REMOVEDIR);
 }
 
-/** Copies src to dir/name as a private file: an APFS clone, or a plain copy elsewhere. */
+/** Copies src to dir/name: an APFS clone, or a plain copy elsewhere. */
 static int copy_file(const char *src, int dir, const char *name) {
-  if (clonefileat(AT_FDCWD, src, dir, name, CLONE_NOFOLLOW) < 0) {
-    if (errno != ENOTSUP && errno != EXDEV) return errno;
-    int in = open(src, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
-    if (in < 0) return errno;
-    int out = openat(dir, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
-    int err = out < 0 || fcopyfile(in, out, NULL, COPYFILE_DATA) < 0 ? errno : 0;
-    close(in);
-    if (out >= 0 && close(out) < 0 && !err) err = errno;
-    return err;
-  }
-  // A clone keeps the source's mode. Make it private, after checking it's still our clone
-  // (O_NONBLOCK: a FIFO swapped in here must not block us while we hold the live database).
+  if (clonefileat(AT_FDCWD, src, dir, name, CLONE_NOFOLLOW) == 0) return 0;
+  if (errno != ENOTSUP && errno != EXDEV) return errno;
+  int in = open(src, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+  if (in < 0) return errno;
+  int out = openat(dir, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+  int err = out < 0 || fcopyfile(in, out, NULL, COPYFILE_DATA) < 0 ? errno : 0;
+  close(in);
+  if (out >= 0 && close(out) < 0 && !err) err = errno;
+  return err;
+}
+
+/**
+ * Makes dir/name private (a clone keeps the source's mode), after checking it's still our
+ * copy. O_NONBLOCK: a FIFO swapped in here must not block us.
+ */
+static int make_private(int dir, const char *name) {
   int fd = openat(dir, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
   if (fd < 0) return errno;
   struct stat st;
@@ -132,10 +138,14 @@ static int copy_db(const char *src, int dir, const char *name) {
              sqlite3_exec(live, "BEGIN; SELECT count(*) FROM sqlite_master;", NULL, NULL, NULL) == SQLITE_OK;
   // A read-only connection can't open a WAL database whose -wal/-shm are gone. With no WAL,
   // the file already holds every committed change and nothing writes to it, so copy it as is.
-  int err = !held && access(src_wal, F_OK) == 0 ? EFAULT : copy_file(src, dir, name);
-  if (!err && access(src_wal, F_OK) == 0) err = copy_file(src_wal, dir, dst_wal);
+  int wal = access(src_wal, F_OK) == 0;
+  int err = !held && wal ? EFAULT : copy_file(src, dir, name);
+  if (!err && wal) err = copy_file(src_wal, dir, dst_wal);
+  // Release the live database before touching anything in the state folder again.
   if (held) sqlite3_exec(live, "COMMIT;", NULL, NULL, NULL);
   sqlite3_close(live);
+  if (!err) err = make_private(dir, name);
+  if (!err && wal) err = make_private(dir, dst_wal);
   if (err) {
     unlinkat(dir, name, 0);
     unlinkat(dir, dst_wal, 0);
@@ -159,7 +169,7 @@ static void copy_contacts(const char *home, int dir) {
     if (access(db, F_OK) < 0 || mkdirat(subs, e->d_name, 0700) < 0) continue;
     int to = open_dir(subs, e->d_name);
     if (to < 0) continue;
-    copy_db(db, to, AB); // An unreadable account is skipped, as before.
+    copy_db(db, to, AB); // An unreadable account is skipped.
     close(to);
   }
   if (subs >= 0) close(subs);
@@ -197,6 +207,12 @@ int main(void) {
 
   char tmp[] = "mirror-new-XXXXXX";
   int out = mkdtempat_np(state, tmp) ? open_dir(state, tmp) : -1;
+  // Same filesystem as the state folder, so nothing can be mounted over the new folder.
+  struct stat st_state, st_out;
+  if (out >= 0 && (fstat(state, &st_state) < 0 || fstat(out, &st_out) < 0 || st_state.st_dev != st_out.st_dev)) {
+    close(out);
+    out = -1;
+  }
   if (!is_private_dir(out)) {
     if (out >= 0) close(out);
     remove_tree(state, tmp, 0);

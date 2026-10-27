@@ -92,9 +92,13 @@ async function doctor(): Promise<void> {
     const ok = check('Full Disk Access', () => {
       if (!fs.existsSync(readerBinary())) throw new Error('the reader is missing (run: node src/cli.ts setup)');
       if (!health.canReadMessages) {
-        throw new Error(readerStatus()?.error === 'EFAIL'
-          ? `the reader couldn't copy Messages; see ${path.join(paths.stateDir, 'logs/reader.log')}`
-          : "the reader doesn't have it yet, so the service can't read Messages");
+        const status = readerStatus();
+        const log = path.join(paths.stateDir, 'logs/reader.log');
+        throw new Error(status?.ok
+          ? `the reader isn't answering, so the service's copy of Messages is out of date; see ${log}`
+          : status?.error === 'EFAIL'
+            ? `the reader couldn't copy Messages; see ${log}`
+            : "the reader doesn't have it yet, so the service can't read Messages");
       }
       return `only the reader has it, and the service can read its copy (${health.messages.toLocaleString()} messages, ${health.contacts} contact handles)`;
     });
