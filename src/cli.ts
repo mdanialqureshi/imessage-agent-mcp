@@ -195,7 +195,11 @@ async function setup(): Promise<void> {
   let access = health;
   if (!access.canReadMessages) {
     console.log(fdaHelp().replace(/^/gm, '   '));
-    if (!flag('no-open')) spawnSync('open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles']);
+    if (!flag('no-open')) {
+      spawnSync('/usr/bin/open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles']);
+      spawnSync('/usr/bin/open', ['-R', readerBinary()]); // Finder hides ~/Library; this shows the file to drag in.
+      console.log('   Opened Full Disk Access in System Settings and showed the reader in Finder: drag it into the list.');
+    }
     if (process.stdout.isTTY && !flag('no-wait')) {
       console.log('\n   Waiting for access (Ctrl-C to finish later with: node src/cli.ts doctor)…');
       for (let i = 0; i < 120 && !access?.canReadMessages; i++) {
