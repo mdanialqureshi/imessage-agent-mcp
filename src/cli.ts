@@ -67,7 +67,7 @@ function buildReader(): boolean {
   const stamp = `${bin}.sha256`;
   const hash = createHash('sha256').update(fs.readFileSync(readerSource)).update(JSON.stringify(READER_BUILD)).digest('hex');
   if (fs.existsSync(bin) && fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8').trim() === hash) return false;
-  if (spawnSync('xcode-select', ['-p'], { stdio: 'ignore' }).status !== 0) {
+  if (spawnSync('/usr/bin/xcode-select', ['-p'], { stdio: 'ignore' }).status !== 0) {
     throw new Error("its reader is built with Apple's Command Line Tools: run `xcode-select --install`, then setup again");
   }
   ensureStateDir();

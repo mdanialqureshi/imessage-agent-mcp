@@ -558,6 +558,21 @@ test('the reader copies Messages and Contacts privately, and only into its own f
     fs.rmSync(mirror, { recursive: true });
     fs.symlinkSync(home, mirror);
     assert.equal(run(), 0);
+    // Things that can't be deleted in the old copy don't make it loop or hang.
+    fs.mkdirSync(path.join(mirror, 'a/b/c/d/e/f/g/h'), { recursive: true });
+    fs.mkdirSync(path.join(mirror, 'locked/inner'), { recursive: true });
+    fs.chmodSync(path.join(mirror, 'locked'), 0o000);
+    fs.writeFileSync(path.join(mirror, 'immutable'), '');
+    execFileSync('/usr/bin/chflags', ['uchg', path.join(mirror, 'immutable')]);
+    const started = Date.now();
+    assert.equal(spawnSync(bin, { timeout: 10_000 }).status, 0, 'finishes despite undeletable leftovers');
+    assert.ok(Date.now() - started < 5000);
+    for (const leftover of fs.readdirSync(state).filter((n) => n.startsWith('mirror-new-'))) {
+      const d = path.join(state, leftover);
+      if (fs.existsSync(path.join(d, 'locked'))) fs.chmodSync(path.join(d, 'locked'), 0o700);
+      if (fs.existsSync(path.join(d, 'immutable'))) execFileSync('/usr/bin/chflags', ['nouchg', path.join(d, 'immutable')]);
+      fs.rmSync(d, { recursive: true });
+    }
     assert.equal(fs.readFileSync(victim, 'utf8'), 'keep me\n', 'never written through a link');
     assert.equal(fs.statSync(victim).mode & 0o777, 0o644, 'never chmodded through a link');
     assert.equal(new DatabaseSync(victimDb, { readOnly: true }).prepare('PRAGMA journal_mode').get()!.journal_mode, 'wal');
@@ -615,6 +630,7 @@ test("the service refreshes the reader's copy when it's stale, once for concurre
     assert.equal(stuck?.error, 'EFAIL', "a reader that doesn't answer leaves the last status");
     assert.match(mirrorProblem(stuck)!, /couldn't copy Messages/);
     assert.equal(mirrorProblem(null), NEEDS_ACCESS);
+    assert.match(mirrorProblem({ ok: true, at: Date.now() - 11 * 60_000 })!, /out of date/, "an old copy isn't served silently");
     write('garbage');
     assert.equal(mirrorProblem((await import('../src/messages/mirror.ts')).readerStatus()), NEEDS_ACCESS);
   } finally {

@@ -9,8 +9,10 @@
 // - It's signed with the hardened runtime (`codesign -o runtime`), so DYLD_* variables and
 //   injected libraries are ignored and debuggers can't attach.
 // - It reaches the state folder one component at a time without following links, then does
-//   everything relative to that handle: no path in the folder is ever followed as a link,
-//   opened by SQLite, or written unless it just created it.
+//   everything relative to that handle. It never follows a link in the folder or opens one of
+//   its files with SQLite, and only changes a file after checking it's its own.
+// - A deadline (alarm) ends it if anything there makes it hang, releasing its read lock on
+//   the live Messages database.
 //
 // launchd runs it as its own job (com.imessage-agent-mcp.reader), so macOS attributes its
 // file access to this binary alone. Built by `node src/cli.ts setup`.
@@ -20,6 +22,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <pwd.h>
+#include <signal.h>
 #include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,38 +67,35 @@ static void status(int err) {
   if (close(fd) == 0 && wrote > 0) renameat(state, "reader-status.tmp", state, "reader-status");
 }
 
-/** Deletes dir/name and everything under it, never following links. */
-static void remove_tree(int dir, const char *name, int depth) {
+/** Deletes dir/name and everything under it, never following links. 0 when it's gone. */
+static int remove_tree(int dir, const char *name, int depth) {
+  if (unlinkat(dir, name, 0) == 0 || errno == ENOENT) return 0;
   int fd = depth < 6 ? open_dir(dir, name) : -1;
-  if (fd < 0) {
-    unlinkat(dir, name, 0);
-    return;
-  }
+  if (fd < 0) return -1;
   DIR *d = fdopendir(fd);
   if (!d) {
     close(fd);
-    return;
+    return -1;
   }
-  // Deleting while reading a directory can skip entries, so repeat until a pass removes nothing.
-  for (int removed = 1; removed;) {
-    removed = 0;
+  // Deleting while reading a directory can skip entries, so take a few passes; an entry that
+  // can't be deleted (locked, unreadable, too deep) just leaves this directory in place.
+  for (int pass = 0, progress = 1; progress && pass < 3; pass++) {
+    progress = 0;
     rewinddir(d);
     struct dirent *e;
     while ((e = readdir(d))) {
-      if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-      remove_tree(dirfd(d), e->d_name, depth + 1);
-      removed = 1;
+      if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..") && remove_tree(dirfd(d), e->d_name, depth + 1) == 0) progress = 1;
     }
   }
   closedir(d);
-  unlinkat(dir, name, AT_REMOVEDIR);
+  return unlinkat(dir, name, AT_REMOVEDIR);
 }
 
 /** Copies src to dir/name as a private file: an APFS clone, or a plain copy elsewhere. */
 static int copy_file(const char *src, int dir, const char *name) {
   if (clonefileat(AT_FDCWD, src, dir, name, CLONE_NOFOLLOW) < 0) {
     if (errno != ENOTSUP && errno != EXDEV) return errno;
-    int in = open(src, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    int in = open(src, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
     if (in < 0) return errno;
     int out = openat(dir, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
     int err = out < 0 || fcopyfile(in, out, NULL, COPYFILE_DATA) < 0 ? errno : 0;
@@ -103,8 +103,9 @@ static int copy_file(const char *src, int dir, const char *name) {
     if (out >= 0 && close(out) < 0 && !err) err = errno;
     return err;
   }
-  // A clone keeps the source's mode. Make it private, after checking it's still our clone.
-  int fd = openat(dir, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  // A clone keeps the source's mode. Make it private, after checking it's still our clone
+  // (O_NONBLOCK: a FIFO swapped in here must not block us while we hold the live database).
+  int fd = openat(dir, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
   if (fd < 0) return errno;
   struct stat st;
   int err = fstat(fd, &st) < 0 ? errno
@@ -168,6 +169,13 @@ static void copy_contacts(const char *home, int dir) {
 
 int main(void) {
   umask(077);
+  // launchd or whoever runs us may have ignored or blocked SIGALRM; the deadline must work.
+  sigset_t alrm;
+  sigemptyset(&alrm);
+  sigaddset(&alrm, SIGALRM);
+  signal(SIGALRM, SIG_DFL);
+  sigprocmask(SIG_UNBLOCK, &alrm, NULL);
+  alarm(120);
   const struct passwd *pw = getpwuid(getuid());
   const char *home = READER_HOME ? READER_HOME : (pw ? pw->pw_dir : NULL);
   char chat[PATH_MAX];

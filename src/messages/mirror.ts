@@ -56,9 +56,15 @@ export const NEEDS_ACCESS =
   "The imessage-agent service on the user's Mac can't read Messages yet: its reader needs Full Disk Access " +
   '(run `node src/cli.ts doctor` on the Mac).';
 
+/** A copy older than this means the reader has stopped answering, so it isn't used. */
+const STALE_MS = 10 * 60_000;
+
 /** Why the copy can't be used, for agents; null when it can. */
 export function mirrorProblem(status: ReaderStatus | null): string | null {
-  if (status?.ok) return null;
+  if (status?.ok) {
+    if (Date.now() - status.at < STALE_MS) return null;
+    return "The imessage-agent service's copy of Messages is out of date because its reader isn't answering (run `node src/cli.ts doctor` on the Mac).";
+  }
   if (!status || status.error === 'EPERM') return NEEDS_ACCESS;
   return "The imessage-agent service on the user's Mac couldn't copy Messages just now. Try again in a minute.";
 }
