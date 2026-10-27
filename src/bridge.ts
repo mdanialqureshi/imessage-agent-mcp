@@ -85,7 +85,12 @@ export function bridge(
             // Answer each request id this message carried exactly once; notifications get nothing.
             const wanted = new Set((Array.isArray(msg) ? msg : [msg]).filter((m) => m?.method && m.id !== undefined).map((m) => m.id));
             const replies = (Array.isArray(reply) ? reply : [reply]).filter((r) => r && typeof r === 'object' && wanted.delete(r.id));
-            if (!replies.length && wanted.size) return fail("imessage-agent service didn't give a usable reply");
+            if (!replies.length && wanted.size) {
+              // The SDK reports transport-level errors (bad protocol version, …) with `id: null`; keep their reason.
+              const r = reply as JsonRpc & { error?: { message?: unknown } };
+              const reason = !Array.isArray(r) && r?.id === null && typeof r.error?.message === 'string' ? r.error.message : null;
+              return fail(reason ?? "imessage-agent service didn't give a usable reply");
+            }
             settle();
             for (const r of replies) {
               if (msg.method === 'initialize' && r.result?.protocolVersion) protocolVersion = r.result.protocolVersion;

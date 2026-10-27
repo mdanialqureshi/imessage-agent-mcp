@@ -315,6 +315,7 @@ test('service listens only on a private Unix socket, and the bridge relays MCP t
     [`[${init1},${init1}]`, undefined], [`[{"jsonrpc":"2.0","id":1,"error":{"message":"boom"}},${init1}]`, undefined],
     [`${init1}|{"jsonrpc":"2.0","id":2,"result":{}}`, 'get_status'],
     ['{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"early"}]}}', 'get_status'],
+    ['{"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":"Bad Request: Unsupported protocol version"}}', undefined],
     [`${init1}|{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"from a notification"}]}}|{"jsonrpc":"2.0","id":9,"result":{}}`, 'get_status'],
   ];
   for (const [i, [body, tool]] of cases.entries()) {
@@ -335,6 +336,7 @@ test('service listens only on a private Unix socket, and the bridge relays MCP t
       assert.equal(res.isError, true, `service reply ${JSON.stringify(body)} is an error`);
       assert.ok(Date.now() - started < 1500, `service reply ${JSON.stringify(body)} doesn't hang`);
       if (body.includes('boom')) assert.equal(res.text, 'boom', 'the real error is shown');
+      if (body.includes('Unsupported')) assert.match(res.text, /Unsupported protocol version/, "the service's own reason is kept");
     } finally {
       fake.closeAllConnections();
       await new Promise((r) => fake.close(r));
