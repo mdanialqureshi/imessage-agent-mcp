@@ -93,7 +93,8 @@ async function doctor(): Promise<void> {
 }
 
 /** The exact `call` command for this install, to paste into an agent's instructions. */
-const callCommand = () => `${which('node') ?? process.execPath} ${cliPath} call`;
+const callCommand = () => [which('node') ?? process.execPath, cliPath].map(shellQuote).join(' ') + ' call';
+const shellQuote = (p: string) => (/^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`);
 
 function waitForService(ms: number): Promise<ServiceHealth | null> {
   const until = Date.now() + ms;
@@ -347,15 +348,18 @@ async function main(): Promise<void> {
     case 'connect':
       return bridge(socketPath());
     case 'call': {
-      let args: Record<string, unknown> = {};
+      const usage = `Arguments must be one JSON object, e.g. call search_messages '{"query":"tuesday"}'`;
+      if (rest.length > 2) throw new Error(usage);
+      let args: unknown = {};
       if (rest[1]) {
         try {
           args = JSON.parse(rest[1]);
         } catch {
-          throw new Error(`Arguments must be one JSON object, e.g. '{"query":"tuesday"}'`);
+          throw new Error(usage);
         }
       }
-      const res = await callTool(socketPath(), rest[0], args);
+      if (typeof args !== 'object' || args === null || Array.isArray(args)) throw new Error(usage);
+      const res = await callTool(socketPath(), rest[0], args as Record<string, unknown>);
       console.log(res.text);
       if (res.isError) process.exitCode = 1;
       return;

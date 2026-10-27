@@ -117,7 +117,7 @@ Restart each desktop app after `setup` so it loads the `imessage` connection.
 **Dot (ChatGPT)** (native tools not yet verified; see above)
 1. Make sure the ChatGPT desktop app is installed on the Mac, signed in, and was restarted after `setup`.
 2. In the ChatGPT desktop app, open your Dot's profile → **Computers** → **Your computer** → **Allow access**, then confirm. You can revoke it there any time.
-3. Tell your Dot: *"When I ask about my texts, plans or commitments, use the `imessage` tools on my Mac. If they aren't in your tool list, run `node <repo>/src/cli.ts call` on the Mac to list them, and `node <repo>/src/cli.ts call <tool> '<json args>'` to use one."* (`doctor` prints the exact command.) Then try: *"What did I commit to in my texts this week?"* Dot may ask you to approve running the command the first time.
+3. Tell your Dot: *"When I ask about my texts, plans or commitments, use the `imessage` tools on my Mac. If they aren't in your tool list, run `node <repo>/src/cli.ts call` on the Mac to list them, and `node <repo>/src/cli.ts call <tool> '<json args>'` to use one."* (`doctor` prints the exact command.) Then try: *"What did I commit to in my texts this week?"* Dot may ask you to approve running the command. Approve only that exact `node … cli.ts call` command, not shell access in general.
 4. Set its cadence (below).
 
 **Claude desktop app**: restart it, open a chat, and ask *"Use the imessage tools: what do I owe people?"* Approve the tool when asked.
@@ -185,7 +185,7 @@ node src/cli.ts call search_messages '{"query":"tuesday","days":14}'
 node src/cli.ts call update_item '{"id":"…","status":"scheduled"}'
 ```
 
-It prints the tool's text result, and exits with 1 on errors. It needs no permissions of its own. Like every other route, it only talks to the Unix socket on this Mac.
+It prints the tool's text result, starting with a line that marks message text as written by other people, and exits with 1 on any error (including a stopped or unresponsive service). It needs no permissions of its own. Like every other route, it only talks to the Unix socket on this Mac. The tool list shows each tool's arguments, e.g. `search_messages(query, days?, limit?)`.
 
 ## Configuration
 

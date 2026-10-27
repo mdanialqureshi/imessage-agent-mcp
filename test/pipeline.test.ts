@@ -247,7 +247,7 @@ test('MCP server exposes read-only tools and updates status', async () => {
 
 test('service listens only on a private Unix socket, and the bridge relays MCP to it', async () => {
   const { serveSocket, socketPath } = await import('../src/server.ts');
-  const { bridge, callTool, serviceHealth, SERVICE_DOWN } = await import('../src/bridge.ts');
+  const { bridge, callTool, serviceHealth, SERVICE_DOWN, UNTRUSTED_NOTE } = await import('../src/bridge.ts');
   const { PassThrough } = await import('node:stream');
   fs.writeFileSync(socketPath(), ''); // a stale file from a crash must not block startup
   const service = await serveSocket({ autoInterpret: false });
@@ -287,8 +287,10 @@ test('service listens only on a private Unix socket, and the bridge relays MCP t
     assert.match(byId.get(3).result.content[0].text, /Open items/);
 
     // `call`, for agents that run commands instead of loading MCP servers.
-    assert.match((await callTool(socketPath())).text, /^get_brief: /m);
-    assert.match((await callTool(socketPath(), 'get_status')).text, /Open items/);
+    assert.match((await callTool(socketPath())).text, /^search_messages\(query, days\?, limit\?\): /m, 'tool list shows argument names');
+    const status = await callTool(socketPath(), 'get_status');
+    assert.ok(status.text.startsWith(UNTRUSTED_NOTE + '\n'), 'call results carry the untrusted-text warning');
+    assert.match(status.text, /Open items/);
     const search = await callTool(socketPath(), 'search_messages', { query: 'tuesday' });
     assert.equal(search.isError, false);
     assert.match(search.text, /tuesday/i);
@@ -303,6 +305,24 @@ test('service listens only on a private Unix socket, and the bridge relays MCP t
   assert.equal(down[0].id, 1);
   assert.equal(down[0].error.message, SERVICE_DOWN, 'apps get a clear message when the service is off');
   assert.deepEqual(await callTool(socketPath(), 'get_status'), { text: SERVICE_DOWN, isError: true });
+
+  // A broken or stuck service is always an error, never a silent empty success or a hang.
+  const http = await import('node:http');
+  const bad = path.join(path.dirname(socketPath()), 'bad.sock');
+  for (const body of ['', 'null', '[null]', '{"jsonrpc":"2.0","id":99,"result":{}}', '{"jsonrpc":"2.0","id":1,"result":{"tools":5}}', 'stall']) {
+    const fake = http.createServer((req, res) => {
+      req.resume();
+      if (body !== 'stall') res.end(body);
+    });
+    await new Promise<void>((r) => fake.listen(bad, r));
+    try {
+      const res = await callTool(bad, undefined, {}, 300);
+      assert.equal(res.isError, true, `service reply ${JSON.stringify(body)} is an error`);
+    } finally {
+      fake.closeAllConnections();
+      await new Promise((r) => fake.close(r));
+    }
+  }
 });
 
 test('app registration merges into JSON configs without touching other servers', async () => {
