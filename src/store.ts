@@ -131,9 +131,11 @@ export class Store {
 
   static open(file = path.join(paths.stateDir, 'state.db')): Store {
     ensureStateDir();
-    const store = new Store(new DatabaseSync(file));
-    // SQLite creates the -wal/-shm files with the main file's permissions.
+    // Create the file 0600 before SQLite opens it; SQLite gives -wal/-shm the main file's mode.
+    fs.closeSync(fs.openSync(file, 'a', 0o600));
     fs.chmodSync(file, 0o600);
+    const store = new Store(new DatabaseSync(file));
+    for (const suffix of ['-wal', '-shm']) if (fs.existsSync(file + suffix)) fs.chmodSync(file + suffix, 0o600);
     return store;
   }
 
@@ -141,6 +143,10 @@ export class Store {
     this.db = db;
     this.db.exec('PRAGMA journal_mode = WAL;');
     this.db.exec(SCHEMA);
+    const runCols = new Set((this.db.prepare('PRAGMA table_info(runs)').all() as { name: string }[]).map((c) => c.name));
+    for (const col of ['discarded', 'skipped_chats']) {
+      if (!runCols.has(col)) this.db.exec(`ALTER TABLE runs ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 0`);
+    }
   }
 
   close(): void {
@@ -255,10 +261,16 @@ export class Store {
     return Number(res.lastInsertRowid);
   }
 
-  finishRun(id: number, stats: { chats: number; messages: number; created: number; updated: number; closed: number; error?: string }): void {
+  finishRun(
+    id: number,
+    stats: { chats: number; messages: number; created: number; updated: number; closed: number; discardedBatches?: number; skippedChats?: number; error?: string },
+  ): void {
     this.db
-      .prepare('UPDATE runs SET finished_at = ?, chats = ?, messages = ?, created = ?, updated = ?, closed = ?, error = ? WHERE id = ?')
-      .run(new Date().toISOString(), stats.chats, stats.messages, stats.created, stats.updated, stats.closed, stats.error ?? null, id);
+      .prepare('UPDATE runs SET finished_at = ?, chats = ?, messages = ?, created = ?, updated = ?, closed = ?, discarded = ?, skipped_chats = ?, error = ? WHERE id = ?')
+      .run(
+        new Date().toISOString(), stats.chats, stats.messages, stats.created, stats.updated, stats.closed,
+        stats.discardedBatches ?? 0, stats.skippedChats ?? 0, stats.error ?? null, id,
+      );
   }
 
   lastRun(): Record<string, any> | null {

@@ -5,7 +5,7 @@ import path from 'node:path';
 export type InterpreterName = 'codex' | 'claude';
 
 export interface Config {
-  /** Which subscription CLI interprets conversations. */
+  /** Which subscription CLI interprets conversations: Claude Code (default) or Codex. */
   interpreter: InterpreterName;
   /** Optional model override passed to the interpreter CLI. */
   model: string | null;
@@ -26,7 +26,7 @@ export interface Config {
 }
 
 const defaults: Config = {
-  interpreter: 'codex',
+  interpreter: 'claude',
   model: null,
   firstRunLookbackDays: 7,
   contextMessages: 25,
@@ -56,6 +56,13 @@ export function ensureStateDir(): void {
   fs.chmodSync(paths.stateDir, 0o700);
 }
 
+export const INTERPRETERS: InterpreterName[] = ['claude', 'codex'];
+
+export function saveConfig(config: Config): void {
+  ensureStateDir();
+  fs.writeFileSync(configPath(), JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
+}
+
 export function loadConfig(): Config {
   ensureStateDir();
   const file = configPath();
@@ -64,5 +71,10 @@ export function loadConfig(): Config {
     return structuredClone(defaults);
   }
   const user = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<Config>;
-  return { ...defaults, ...user, http: { ...defaults.http, ...user.http } };
+  const config = { ...defaults, ...user, http: { ...defaults.http, ...user.http } };
+  // An environment override beats config.json, e.g. for one-off runs or the launchd plist.
+  const fromEnv = process.env.IMESSAGE_AGENT_INTERPRETER as InterpreterName | undefined;
+  if (fromEnv) config.interpreter = fromEnv;
+  if (!INTERPRETERS.includes(config.interpreter)) throw new Error(`interpreter must be "claude" or "codex", got "${config.interpreter}"`);
+  return config;
 }

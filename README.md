@@ -24,14 +24,14 @@ This server runs on your Mac, reads your Messages database **read-only**, and un
 
 Your agent asks for a brief on whatever schedule you set, notifies you in its own chat, and offers to add events or reminders with its own calendar tools.
 
-- **No API keys or usage billing.** Interpretation runs through a CLI you're already signed into with your subscription: [Codex CLI](https://github.com/openai/codex) (ChatGPT plan, the default) or [Claude Code](https://claude.com/claude-code) (Claude plan).
+- **No API keys or usage billing.** Interpretation runs through a CLI you're already signed into with your subscription: [Claude Code](https://claude.com/claude-code) (Claude plan, the default) or [Codex CLI](https://github.com/openai/codex) (ChatGPT plan). [Switching is one command.](#choosing-an-interpreter)
 - **Everything stays on your Mac.** No cloud service, no database anywhere else. Message text leaves the machine only when the interpreter reads it, and when an agent you connected asks for it.
 
 ## How it works
 
 ```
 ~/Library/Messages/chat.db  ─┐
-Contacts (names)             ├─► conversation windows ─► codex exec / claude -p ─► local item store
+Contacts (names)             ├─► conversation windows ─► claude -p / codex exec ─► local item store
                              │   (context + tapbacks,       (your subscription)       (open / done /
 privacy filters ─────────────┘    replies, edits)                                       dismissed …)
                                                                                            │
@@ -49,7 +49,7 @@ privacy filters ─────────────┘    replies, edits)   
 
 - macOS with **Messages in iCloud** on (so messages you send from your iPhone are on the Mac too)
 - Node.js ≥ 23.6 (runs the TypeScript directly; no build step)
-- One interpreter CLI, signed in: `codex login` (ChatGPT plan) or `claude` (Claude plan)
+- One interpreter CLI, signed in with a subscription: [Claude Code](https://claude.com/claude-code) (`claude`, the default) or [Codex CLI](https://github.com/openai/codex) (`codex login`). See [Choosing an interpreter](#choosing-an-interpreter).
 - **Full Disk Access** for whatever reads `chat.db` (see Setup, step 3)
 
 ## Setup
@@ -72,6 +72,30 @@ npm install
 6. **Connect your agent.** See [docs/agent-setup.md](docs/agent-setup.md).
 
 The first run looks back 7 days (`firstRunLookbackDays`). After that, each run only reads what arrived since the last one.
+
+## Choosing an interpreter
+
+The **interpreter** is the AI model that reads your new messages in the background and works out the commitments. Your agent (Dot, Claude, …) never does this part. It just reads the finished list. Both supported interpreters run through a CLI you're signed into with a subscription, so neither costs API credits.
+
+| | Claude Code (default) | Codex CLI |
+|---|---|---|
+| Subscription | Claude plan (Pro/Max) | ChatGPT plan (Plus/Pro) |
+| Sign in | `claude` (once, interactively) | `codex login` |
+| Lockdown | No callable tools at all | All features disabled, tool attempts discarded ([details](#privacy-and-security)) |
+| Eval score* | 69/69 | 69/69 |
+
+\*Three runs of the live evaluation (`npm run eval`): 23 labeled scenarios, including slang agreements, tapbacks, declines, banter, exact times, prompt injection, and reschedule/done/cancel follow-ups.
+
+**Switch** with any of these:
+
+```sh
+node src/cli.ts use codex          # saved to config.json; the service picks it up on its next run
+node src/cli.ts use claude
+node src/cli.ts interpret --interpreter codex     # one run only
+IMESSAGE_AGENT_INTERPRETER=codex node src/cli.ts serve --http   # environment override
+```
+
+`node src/cli.ts doctor` shows whether each CLI is installed and signed in **with a subscription**. It warns if a CLI is using an API key instead, since that would bill usage. The background service pins both CLIs' paths at install time, so you can switch without reinstalling it. Optional: `"model"` in `config.json` passes a specific model to the active CLI.
 
 ## Cadence: your agent decides
 
@@ -102,7 +126,7 @@ Read-only tools carry `readOnlyHint`, so agents that limit background work to re
 
 | Key | Default | Meaning |
 |---|---|---|
-| `interpreter` | `"codex"` | `"codex"` (ChatGPT plan) or `"claude"` (Claude plan) |
+| `interpreter` | `"claude"` | `"claude"` (Claude plan) or `"codex"` (ChatGPT plan). Also settable with `use` or `IMESSAGE_AGENT_INTERPRETER` |
 | `model` | `null` | Optional model override passed to the CLI |
 | `firstRunLookbackDays` | `7` | How far back the first run reads |
 | `contextMessages` | `25` | Earlier messages shown before new ones in each chat |
@@ -120,10 +144,10 @@ Read-only tools carry `readOnlyHint`, so agents that limit background work to re
 - **The HTTP endpoint is loopback-only and authenticated.** It refuses to bind to anything but localhost. It rejects requests whose `Host` or `Origin` isn't local, which blocks web pages using DNS rebinding. It requires a bearer token (`node src/cli.ts token`), and the state directory is `0700`, with files `0600`.
 - **The interpreter is a pure text-in, JSON-out call.** Message text is attacker-controlled, so the interpreter gets no tools:
   - `claude -p` (**the most locked-down option**): `--tools ""`, an empty `--strict-mcp-config`, no setting sources, `--no-session-persistence`. The model has no callable tools at all.
-  - `codex exec`: every Codex feature enabled by default is disabled, read from `codex features list` at runtime. That covers shell and exec, ChatGPT connectors (apps and plugins), code mode, browser and computer use, and memories. It also runs with `--ignore-user-config`, `--ephemeral` and a read-only sandbox. **Caveat:** Codex 0.164 still *lists* "collaboration" (sub-agent) tools that no flag removes. Calling them fails, because `--ephemeral` sessions can't spawn agents and code mode is off. So nothing reachable can run commands, read files or touch your connectors, but that rests on those two settings.
+  - `codex exec`: every Codex feature enabled by default is disabled, read from `codex features list` at runtime. That covers shell and exec, ChatGPT connectors (apps and plugins), code mode, browser and computer use, and memories. It also runs with `--ignore-user-config`, `--ephemeral` and a read-only sandbox. **Caveat:** Codex 0.164 still *lists* "collaboration" (sub-agent) tools that no flag removes. The ones that could act (spawning or directing an agent) fail, because `--ephemeral` sessions can't spawn agents and code mode is off. The rest only list or message agents that don't exist, and every call is caught by the fail-closed check below. So nothing reachable can run commands, read files or touch your connectors, but that rests on those two settings.
 - **Fail closed (Codex).** Codex logs every tool call it makes, including ones its `--json` output omits. If the log shows any tool call, or the event stream contains anything beyond a plain text answer, that batch's output is thrown away. This is detection after the fact: it keeps an injected tool call from affecting your items, while the disabled features keep the call from reaching anything.
 - **Size limits.** Each message is capped at 2,000 characters and each conversation window at 40,000, so a flood of text can't break interpretation. A chat that fails 3 runs in a row is skipped rather than stalling every run.
-- **Strangers are isolated.** A chat with anyone who isn't in your Contacts is interpreted on its own, so their text never shares a prompt with your other conversations. Every change must cite messages from its own chat, and closing an item requires a new message. Reactions only quote messages from the same chat. *Residual risk:* chats with saved contacts are batched together, so a contact's message could still steer the model's reading of another contact's chat in the same batch.
+- **Strangers are isolated.** A chat with anyone who isn't in your Contacts is interpreted on its own; if that call fails for any reason, only that chat is dropped, so their text never shares a prompt with your other conversations. Every change must cite messages from its own chat, and closing an item requires a new message. Reactions only quote messages from the same chat. *Residual risk:* chats with saved contacts are batched together, so a contact's message could still steer the model's reading of another contact's chat in the same batch.
 - **No forged structure.** Embedded newlines are collapsed everywhere (messages, group names, model output), so text can't forge transcript lines or brief sections. Interpreter output is never logged, because it can echo message text.
 - **Prompt injection.** Messages are written by other people. The interpreter prompt, tool descriptions and the brief all tell models to treat message text as data. The server has no tool that sends messages, and the only write is changing an item's status. Your agent still decides what to do with its own tools, so keep it asking before acting.
 - **Threat model.** This protects against other people (via the messages they send you), web pages, and other macOS users. It **can't** protect against malware already running as *your* user. Such malware could read the token and state files, or reuse the `node` binary you gave Full Disk Access to. A dedicated single-purpose helper binary is on the [roadmap](docs/roadmap.md).
@@ -140,6 +164,8 @@ Read-only tools carry `readOnlyHint`, so agents that limit background work to re
 
 ```sh
 npm test              # synthetic fixture tests (no real data, no model calls)
+npm run eval          # live eval of both interpreters on labeled synthetic chats (uses your subscriptions)
+npm run eval -- --interpreter claude --runs 3
 npm run safety        # secret/PII scan of staged files (also the pre-commit hook)
 git config core.hooksPath .githooks   # pre-commit: staged-file scan; pre-push: full scan + authors + tests
 ```

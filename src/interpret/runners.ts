@@ -86,14 +86,18 @@ export const CODEX_TOOL_FEATURES = [
   'skill_search', 'skill_mcp_dependency_install', 'hooks', 'sleep_tool',
 ];
 
-let codexFeatures: string[] | null = null;
+let codexFeatures: { key: string; features: string[] } | null = null;
 
 /**
  * Every feature enabled in the installed Codex, so tools added by future versions are
  * switched off too. Text-in/JSON-out needs none of them.
  */
 export function enabledCodexFeatures(codexBin = bin('codex')): string[] {
-  if (!codexFeatures) {
+  // Re-read after a codex upgrade, which the long-running service would otherwise miss.
+  const resolved = execFileSync('/usr/bin/which', [codexBin], { encoding: 'utf8' }).trim() || codexBin;
+  const real = fs.realpathSync(resolved);
+  const key = `${real}:${fs.statSync(real).mtimeMs}`;
+  if (codexFeatures?.key !== key) {
     // exec runs with --ignore-user-config, so list features as defaults (an empty
     // CODEX_HOME) rather than as the user's config.toml has them.
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'imessage-agent-codex-'));
@@ -103,13 +107,12 @@ export function enabledCodexFeatures(codexBin = bin('codex')): string[] {
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
-    codexFeatures = out
-      .split('\n')
-      .map((l) => l.trim().split(/\s+/))
-      .filter((cols) => cols.length >= 2 && cols.at(-1) === 'true')
-      .map((cols) => cols[0]);
+    const rows = out.split('\n').map((l) => l.trim().split(/\s+/)).filter((cols) => cols.length >= 2);
+    // Fail closed if the format changed and the parse no longer finds the features.
+    if (!rows.some((cols) => cols[0] === 'shell_tool')) throw new Error('Could not read `codex features list`; refusing to run codex');
+    codexFeatures = { key, features: rows.filter((cols) => cols.at(-1) === 'true').map((cols) => cols[0]) };
   }
-  return codexFeatures;
+  return codexFeatures.features;
 }
 
 /**

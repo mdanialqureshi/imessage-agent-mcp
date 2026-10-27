@@ -7,12 +7,13 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { buildBrief, formatItem } from './brief.ts';
-import { type Config, loadConfig, paths } from './config.ts';
+import { type Config, ensureStateDir, loadConfig, paths } from './config.ts';
 import { interpretNow, type RunResult } from './interpret/run.ts';
 import { ChatDb, type Message } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
 import { Conversations, displayText, formatTime, isFilteredText } from './messages/conversations.ts';
 import { KINDS, STATUSES, Store } from './store.ts';
+import { oneLine } from './text.ts';
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, openWorldHint: false } as const;
 /** How long refresh waits before telling the agent to check back. */
@@ -47,7 +48,7 @@ function withMessages<T>(config: Config, fn: (db: ChatDb, conv: Conversations) =
 }
 
 function renderMessage(conv: Conversations, m: Message): string {
-  const body = m.reaction ? `reacted ${m.reaction.emoji}` : displayText(m.text) || '[attachment]';
+  const body = m.reaction ? `reacted ${displayText(m.reaction.emoji)}` : displayText(m.text) || '[attachment]';
   return `${formatTime(m.date)} ${conv.sender(m)}: ${body}`;
 }
 
@@ -137,7 +138,7 @@ export function createServer(config: Config): McpServer {
       if (status === 'snoozed' && !snooze_until) return text('snooze_until is required when snoozing.');
       const until = snooze_until ? new Date(snooze_until).toISOString() : null;
       const item = withStore((s) => (s.getItem(id) ? s.setStatus(id, status, { note, snoozedUntil: until }) : null));
-      return text(item ? `Updated: ${item.title} → ${item.status}` : `No item ${id}.`);
+      return text(item ? `Updated: ${oneLine(item.title)} → ${item.status}` : `No item ${id}.`);
     },
   );
 
@@ -239,8 +240,13 @@ export function createServer(config: Config): McpServer {
           return [
             `Last interpreted: ${s.getMeta('last_interpreted_at') ?? 'never'}`,
             `Last run: ${last ? `${last.started_at} via ${last.interpreter}${last.error ? ` — ERROR: ${last.error}` : ` — ${last.created} new, ${last.updated} updated, ${last.closed} closed`}` : 'none'}`,
+            last && (last.discarded || last.skipped_chats)
+              ? `Not interpreted last run: ${last.discarded} batch(es) discarded (tool attempt or error in a stranger's chat), ${last.skipped_chats} chat(s) skipped after repeated failures`
+              : '',
             `Open items: ${open.length}${counts.length ? ` (${counts.join(', ')})` : ''}`,
-          ].join('\n');
+          ]
+            .filter(Boolean)
+            .join('\n');
         }),
       ),
   );
@@ -255,6 +261,7 @@ export async function serveStdio(): Promise<void> {
 
 /** Bearer token for the HTTP endpoint, created on first use and readable only by this user. */
 export function httpToken(): string {
+  ensureStateDir();
   const file = path.join(paths.stateDir, 'http-token');
   if (!fs.existsSync(file)) fs.writeFileSync(file, crypto.randomBytes(32).toString('base64url') + '\n', { mode: 0o600 });
   return fs.readFileSync(file, 'utf8').trim();

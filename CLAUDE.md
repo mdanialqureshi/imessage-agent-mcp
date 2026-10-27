@@ -10,7 +10,7 @@ The code reads private message history, and the repo is shared publicly. **Nothi
 - An independent security subagent audits the diff before every push. Fix findings first.
 - Test data is synthetic only: fake names, `555` numbers, `example.com` emails. Never commit `chat.db`, `state.db`, exports, logs, `config.json`, `.env`, or anything from `~/Library`.
 - Commit with the GitHub noreply email, not a personal address.
-- No API keys anywhere. Interpretation uses subscription CLIs (`codex exec`, `claude -p`).
+- No API keys anywhere. Interpretation uses subscription CLIs: `claude -p` (default) or `codex exec`. Changes to either runner must keep `npm run eval` passing for both.
 
 ## Layout
 

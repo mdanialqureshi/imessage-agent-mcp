@@ -115,7 +115,7 @@ function toFields(op: RawOp, w: Window, conv: Conversations): ItemFields {
       rowid: m.rowid,
       from: conv.sender(m),
       date: formatTime(m.date),
-      text: m.reaction ? `reacted ${m.reaction.emoji}` : displayText(m.text),
+      text: m.reaction ? `reacted ${displayText(m.reaction.emoji)}` : displayText(m.text),
     }));
   return {
     kind: op.kind as Kind,
@@ -245,7 +245,8 @@ export async function interpretNow(
         if (!Array.isArray(ops)) throw new Error('Interpreter returned no ops array');
       } catch (err) {
         // A hostile message must not block every future run, so only this batch is dropped.
-        if (err instanceof ToolUseAttempt) {
+        // So is any failure in a stranger's isolated chat: no one else's messages are held up.
+        if (err instanceof ToolUseAttempt || batch.every((w) => isolated.has(w.ref))) {
           result.discardedBatches++;
           continue;
         }

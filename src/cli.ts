@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildBrief, formatItem } from './brief.ts';
-import { configPath, loadConfig, paths } from './config.ts';
+import { type Config, configPath, INTERPRETERS, type InterpreterName, loadConfig, paths, saveConfig } from './config.ts';
 import { interpretNow } from './interpret/run.ts';
 import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
@@ -48,13 +48,11 @@ function doctor(): void {
     if (!n) throw new Error('no contacts readable — names will show as phone numbers');
     return `${n} phone numbers/emails`;
   });
-  check(`Interpreter (${config.interpreter})`, () => {
-    const out =
-      config.interpreter === 'codex'
-        ? execFileSync('codex', ['login', 'status'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-        : execFileSync('claude', ['--version'], { encoding: 'utf8' });
-    return out.trim().split('\n')[0];
-  });
+  for (const name of INTERPRETERS) {
+    const active = name === config.interpreter;
+    const ok = check(`Interpreter ${name}${active ? ' (active)' : ''}`, () => interpreterStatus(name));
+    if (!ok && active) console.log(`   Fix: sign in (\`${name === 'claude' ? 'claude' : 'codex login'}\`) or switch: node src/cli.ts use ${name === 'claude' ? 'codex' : 'claude'}`);
+  }
   check('State', () => {
     const store = Store.open();
     const open = store.listItems({ status: ['open'] }).length;
@@ -66,6 +64,36 @@ function doctor(): void {
     if (!fs.existsSync(plistPath)) throw new Error('not installed (run: install-service)');
     return plistPath;
   });
+}
+
+/**
+ * Whether an interpreter CLI is installed and signed in with a subscription. Only the
+ * auth method is read; account details (like the email) are never printed.
+ */
+function interpreterStatus(name: InterpreterName): string {
+  if (name === 'claude') {
+    const status = JSON.parse(execFileSync('claude', ['auth', 'status'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
+    if (!status.loggedIn) throw new Error('not signed in (run: claude)');
+    if (status.authMethod !== 'claude.ai') throw new Error(`signed in via ${status.authMethod}: this would bill API usage, sign in with your Claude plan instead`);
+    return 'signed in with a Claude plan';
+  }
+  // codex prints its login status on stderr.
+  const res = spawnSync('codex', ['login', 'status'], { encoding: 'utf8' });
+  if (res.error) throw res.error;
+  const out = `${res.stdout}${res.stderr}`.trim();
+  if (res.status !== 0 || !/ChatGPT/i.test(out)) throw new Error(`${out.split('\n')[0]}: sign in with your ChatGPT plan (codex login) to avoid API billing`);
+  return 'signed in with a ChatGPT plan';
+}
+
+function useInterpreter(name: string | undefined): void {
+  if (!INTERPRETERS.includes(name as InterpreterName)) {
+    console.log(`Usage: node src/cli.ts use <${INTERPRETERS.join('|')}>`);
+    process.exitCode = 1;
+    return;
+  }
+  const config: Config = { ...loadConfig(), interpreter: name as InterpreterName };
+  saveConfig(config);
+  console.log(`Interpreter set to ${name}. The background service picks this up on its next run.`);
 }
 
 /** Prints what the interpreter would see, for review and labeling. */
@@ -103,13 +131,17 @@ function plist(): string {
   const config = loadConfig();
   const logDir = path.join(paths.stateDir, 'logs');
   fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
-  const interpreterBin = which(config.interpreter);
-  if (!interpreterBin) throw new Error(`${config.interpreter} not found on PATH; install and sign in first.`);
-  // The CLIs need node (and git for codex) on PATH; system dirs only besides node's own.
+  // Both CLIs are pinned when installed, so `use codex` / `use claude` works without reinstalling.
   const env: Record<string, string> = {
     PATH: [path.dirname(fs.realpathSync(process.execPath)), '/usr/bin', '/bin'].join(':'),
-    [`IMESSAGE_AGENT_${config.interpreter.toUpperCase()}_BIN`]: interpreterBin,
   };
+  for (const name of INTERPRETERS) {
+    const found = which(name);
+    if (found) env[`IMESSAGE_AGENT_${name.toUpperCase()}_BIN`] = found;
+  }
+  if (!env[`IMESSAGE_AGENT_${config.interpreter.toUpperCase()}_BIN`]) {
+    throw new Error(`${config.interpreter} not found on PATH; install and sign in first, or: node src/cli.ts use <claude|codex>`);
+  }
   const envXml = Object.entries(env).map(([k, v]) => `<key>${xml(k)}</key><string>${xml(v)}</string>`).join('');
   const args = [process.execPath, cliPath, 'serve', '--http'].map((a) => `    <string>${xml(a)}</string>`).join('\n');
   const log = xml(path.join(logDir, 'service.log'));
@@ -173,7 +205,10 @@ async function main(): Promise<void> {
     case 'export':
       return exportConversations();
     case 'interpret': {
-      const res = await interpretNow({ dryRun: flag('dry-run') });
+      const override = option('interpreter') as InterpreterName | undefined;
+      if (override && !INTERPRETERS.includes(override)) throw new Error(`--interpreter must be ${INTERPRETERS.join(' or ')}`);
+      const config = loadConfig();
+      const res = await interpretNow({ dryRun: flag('dry-run'), config: override ? { ...config, interpreter: override } : config });
       if (res.prompts) console.log(res.prompts.join('\n\n=========== next batch ===========\n\n'));
       else console.log(JSON.stringify(res, null, 2));
       return;
@@ -193,6 +228,8 @@ async function main(): Promise<void> {
       if (flag('http')) await serveHttp({ autoInterpret: !flag('no-auto') });
       else await serveStdio();
       return;
+    case 'use':
+      return useInterpreter(rest[0]);
     case 'token':
       return console.log(httpToken());
     case 'install-service':
@@ -207,8 +244,9 @@ Usage: node src/cli.ts <command>
   doctor               Check permissions, contacts, interpreter and service
   export [--days 7] [--out file]
                        Print conversations exactly as the interpreter sees them
-  interpret [--dry-run]
+  interpret [--dry-run] [--interpreter claude|codex]
                        Interpret new messages now (--dry-run prints the prompt only)
+  use <claude|codex>   Choose which subscription CLI reads your messages
   brief [--since ISO] [--all]
                        Print the brief agents receive
   items [--all]        List tracked items

@@ -3,7 +3,7 @@
 ## Design decisions
 
 - **Local only.** Messages, items and state stay on the Mac. No cloud store.
-- **No API billing.** Interpretation uses subscription CLIs (`codex exec`, `claude -p`), swappable in config.
+- **No API billing.** Interpretation uses subscription CLIs: `claude -p` (default) or `codex exec`, switchable with `use`, config, or env.
 - **Smart server, thin clients.** All interpretation happens here, so every agent gets the same results. Agents only read the brief and update statuses.
 - **Agents own cadence and actions.** The server doesn't notify or create calendar events. The connected agent does, after asking the user.
 - **Read-only first.** Core tools are read-only so restricted background agents can use them. Writes are limited to item status.
@@ -20,7 +20,7 @@
 
 ### M2: real-data tuning
 - Grant Full Disk Access, run on real history, label ~50 conversations together
-- Measure precision and recall per kind; tune the prompt; add few-shot examples learned from `dismissed` items
+- Extend the synthetic eval (`npm run eval`, 23 scenarios × both interpreters) with real-data cases; measure precision and recall per kind; tune the prompt; add few-shot examples learned from `dismissed` items
 - Call history (`CallHistoryDB`) to auto-close `call` items
 
 ### M3: remote access for cloud agents (ChatGPT / Dots, claude.ai)

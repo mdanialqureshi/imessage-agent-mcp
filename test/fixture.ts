@@ -9,7 +9,20 @@ const APPLE_EPOCH_MS = 978307200000;
 /** "Now" for tests: Monday morning, so "tuesday" means tomorrow. */
 export const NOW = new Date('2026-10-26T09:00:00');
 
-export const PEOPLE = {
+export interface Person {
+  name: string | null;
+  handle: string;
+}
+export interface ChatSpec {
+  members: string[];
+  name?: string;
+}
+export interface Spec {
+  people: Record<string, Person>;
+  chats: Record<string, ChatSpec>;
+}
+
+export const PEOPLE: Record<string, Person> = {
   ali: { name: 'Ali Rahman', handle: '+12125550101' },
   maya: { name: 'Maya Chen', handle: '+12125550102' },
   sam: { name: 'Sam Ortiz', handle: '+12125550103' },
@@ -39,8 +52,8 @@ export function attributedBody(text: string): Buffer {
   ]);
 }
 
-type Who = keyof typeof PEOPLE | 'me';
-interface Msg {
+type Who = string;
+export interface Msg {
   chat: string;
   from: Who;
   at: string;
@@ -51,7 +64,7 @@ interface Msg {
   key?: string;
 }
 
-const CHATS: Record<string, { members: (keyof typeof PEOPLE)[]; name?: string }> = {
+const CHATS: Record<string, ChatSpec> = {
   ali: { members: ['ali'] },
   maya: { members: ['maya'] },
   sam: { members: ['sam'] },
@@ -90,7 +103,9 @@ export const MESSAGES: Msg[] = [
 
 const toAppleNs = (iso: string) => BigInt(new Date(iso).getTime() - APPLE_EPOCH_MS) * 1000000n;
 
-function buildChatDb(file: string, messages: Msg[]): void {
+export const DEFAULT_SPEC: Spec = { people: PEOPLE, chats: CHATS };
+
+function buildChatDb(file: string, messages: Msg[], { people, chats }: Spec): void {
   const db = new DatabaseSync(file);
   db.exec(`
     CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT, service TEXT);
@@ -104,15 +119,15 @@ function buildChatDb(file: string, messages: Msg[]): void {
       is_audio_message INTEGER DEFAULT 0, date_edited INTEGER DEFAULT 0, date_retracted INTEGER DEFAULT 0);
   `);
   const handleIds = new Map<string, number>();
-  Object.entries(PEOPLE).forEach(([key, p], i) => {
+  Object.entries(people).forEach(([key, p], i) => {
     handleIds.set(key, i + 1);
     db.prepare('INSERT INTO handle VALUES (?, ?, ?)').run(i + 1, p.handle, 'iMessage');
   });
   const chatIds = new Map<string, number>();
-  Object.entries(CHATS).forEach(([key, c], i) => {
+  Object.entries(chats).forEach(([key, c], i) => {
     const id = i + 1;
     chatIds.set(key, id);
-    const identifier = c.members.length > 1 ? `chat${1000 + id}` : PEOPLE[c.members[0]].handle;
+    const identifier = c.members.length > 1 ? `chat${1000 + id}` : people[c.members[0]].handle;
     db.prepare('INSERT INTO chat VALUES (?, ?, ?, ?, ?)').run(id, `iMessage;-;${identifier}`, identifier, c.name ?? '', c.members.length > 1 ? 43 : 45);
     for (const m of c.members) db.prepare('INSERT INTO chat_handle_join VALUES (?, ?)').run(id, handleIds.get(m)!);
   });
@@ -121,7 +136,7 @@ function buildChatDb(file: string, messages: Msg[]): void {
     const rowid = i + 1;
     const guid = `FAKE-GUID-${String(rowid).padStart(4, '0')}`;
     if (m.key) guids.set(m.key, guid);
-    const chat = CHATS[m.chat];
+    const chat = chats[m.chat];
     const sender = m.from === 'me' ? (chat.members.length === 1 ? chat.members[0] : null) : m.from;
     const text = m.tapback ? null : m.blobOnly ? null : (m.text ?? null);
     const blob = m.text && !m.tapback ? attributedBody(m.text) : null;
@@ -137,7 +152,7 @@ function buildChatDb(file: string, messages: Msg[]): void {
   db.close();
 }
 
-function buildAddressBook(dir: string): void {
+function buildAddressBook(dir: string, people: Record<string, Person>): void {
   const sourceDir = path.join(dir, 'Sources', 'FAKE-SOURCE');
   fs.mkdirSync(sourceDir, { recursive: true });
   const db = new DatabaseSync(path.join(sourceDir, 'AddressBook-v22.abcddb'));
@@ -146,7 +161,7 @@ function buildAddressBook(dir: string): void {
     CREATE TABLE ZABCDPHONENUMBER (ZOWNER INTEGER, ZFULLNUMBER TEXT);
     CREATE TABLE ZABCDEMAILADDRESS (ZOWNER INTEGER, ZADDRESS TEXT);
   `);
-  Object.values(PEOPLE).forEach((p, i) => {
+  Object.values(people).forEach((p, i) => {
     if (!p.name) return;
     const [first, ...last] = p.name.split(' ');
     db.prepare('INSERT INTO ZABCDRECORD VALUES (?, ?, ?, NULL, NULL)').run(i + 1, first, last.join(' ') || null);
@@ -157,16 +172,23 @@ function buildAddressBook(dir: string): void {
 }
 
 /** Creates the fixture under `dir` and returns the env vars that point the app at it. */
-export function buildFixture(dir: string, messages: Msg[] = MESSAGES): Record<string, string> {
+export function buildFixture(dir: string, messages: Msg[] = MESSAGES, spec: Spec = DEFAULT_SPEC): Record<string, string> {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
   const chatDb = path.join(dir, 'chat.db');
   const addressBook = path.join(dir, 'AddressBook');
   const state = path.join(dir, 'state');
-  buildChatDb(chatDb, messages);
-  buildAddressBook(addressBook);
+  buildChatDb(chatDb, messages, spec);
+  buildAddressBook(addressBook, spec.people);
   fs.mkdirSync(state, { recursive: true });
   return { IMESSAGE_DB_PATH: chatDb, ADDRESSBOOK_DIR: addressBook, IMESSAGE_AGENT_STATE_DIR: state };
+}
+
+/** Rebuilds only chat.db (keeping state), e.g. to simulate new messages arriving. Rowids are stable for a prefix. */
+export function rebuildChatDb(dir: string, messages: Msg[], spec: Spec = DEFAULT_SPEC): void {
+  const chatDb = path.join(dir, 'chat.db');
+  for (const suffix of ['', '-wal', '-shm']) fs.rmSync(chatDb + suffix, { force: true });
+  buildChatDb(chatDb, messages, spec);
 }
 
 // `node test/fixture.ts <dir>` builds a fixture for manual runs and prints the env vars.
