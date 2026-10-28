@@ -517,7 +517,8 @@ ${args}
   </array>
   <key>EnvironmentVariables</key>
   <dict>${envXml}</dict>
-  <key>KeepAlive</key><true/>`);
+  <key>KeepAlive</key><true/>
+  <key>ExitTimeOut</key><integer>5</integer>`);
 }
 
 /**
@@ -572,19 +573,21 @@ const launchctl = (...args: string[]) => execFileSync('/bin/launchctl', args, { 
  */
 function setServiceRunning(on: boolean): void {
   if (installedProgram() !== cliPath) return;
-  for (const [label, file] of [[READER_LABEL, readerPlistPath], [LABEL, plistPath]]) {
-    if (on) {
+  const jobs = [[READER_LABEL, readerPlistPath], [LABEL, plistPath]];
+  if (on) {
+    for (const [label, file] of jobs) {
       launchctl('enable', `${domain()}/${label}`);
       try {
         launchctl('bootstrap', domain(), file);
       } catch {
         // Already running.
       }
-    } else {
-      bootout(file);
-      launchctl('disable', `${domain()}/${label}`);
     }
+    return;
   }
+  // Switched off first (instant, and it's what keeps login from starting them), then stopped.
+  for (const [label] of jobs) launchctl('disable', `${domain()}/${label}`);
+  for (const [, file] of jobs) bootout(file);
 }
 
 function installService(): void {
@@ -627,7 +630,7 @@ function uninstallService(): void {
     bootout(file);
     fs.rmSync(file, { force: true });
     try {
-      launchctl('enable', `${domain()}/${label}`); // Leaves no "switched off" record behind.
+      launchctl('enable', `${domain()}/${label}`); // So a later install isn't left switched off.
     } catch {
       // Nothing recorded.
     }

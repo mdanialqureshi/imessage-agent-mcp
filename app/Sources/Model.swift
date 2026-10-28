@@ -181,8 +181,16 @@ final class Model: ObservableObject {
     Backend.keepServiceOnQuit = true
     let config = NSWorkspace.OpenConfiguration()
     config.createsNewApplicationInstance = true
-    NSWorkspace.shared.openApplication(at: current, configuration: config) { _, _ in
-      DispatchQueue.main.async { NSApp.terminate(nil) }
+    NSWorkspace.shared.openApplication(at: current, configuration: config) { _, error in
+      DispatchQueue.main.async {
+        guard error == nil else {
+          // Stay open (and keep owning the service) rather than quit with nothing to take over.
+          Backend.keepServiceOnQuit = false
+          Model.shared.problem = "The update is installed, but it couldn't reopen. Quit Messages Agent and open it again."
+          return
+        }
+        NSApp.terminate(nil)
+      }
     }
   }
 
