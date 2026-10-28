@@ -641,3 +641,55 @@ test("the service refreshes the reader's copy when it's stale, once for concurre
     fs.rmSync(file, { force: true });
   }
 });
+
+test("a clone's reader is rebuilt only when needed, and never into a folder others can change", { skip: process.platform !== 'darwin' && 'macOS only' }, async () => {
+  const { installReader, readerCdHash, readerBinary } = await import('../src/messages/mirror.ts');
+  const source = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'helper', 'reader.c');
+  const base = path.join(dir, 'install-reader');
+  fs.rmSync(base, { recursive: true, force: true });
+  const apps = path.join(base, 'Applications');
+  const app = path.join(apps, 'imessage-agent-reader.app');
+  const stateDir = path.join(base, 'state');
+  const opts = { app, stateDir, inApp: false };
+
+  assert.equal(installReader(source, opts), true, 'first install builds it');
+  const cdhash = readerCdHash(app);
+  assert.ok(cdhash);
+  assert.equal(fs.statSync(apps).mode & 0o777, 0o755);
+  assert.equal(fs.statSync(readerBinary(app)).mode & 0o777, 0o755);
+  assert.equal(installReader(source, opts), false, 'unchanged: kept, so Full Disk Access stays on');
+  assert.ok(!fs.existsSync(path.join(stateDir, 'reader-build.app')), 'no build folder left behind');
+
+  // A changed program is caught and replaced; the build is deterministic, so it's the same reader again.
+  const bin = readerBinary(app);
+  const bytes = fs.readFileSync(bin);
+  bytes[0x2000] ^= 0xff; // Inside the code the signature covers.
+  fs.writeFileSync(bin, bytes);
+  assert.equal(readerCdHash(app), null, 'a changed reader fails its signature check');
+  assert.equal(installReader(source, opts), true);
+  assert.equal(readerCdHash(app), cdhash);
+
+  // A forged stamp doesn't hide a different reader.
+  fs.writeFileSync(path.join(stateDir, 'reader.sha256'), fs.readFileSync(path.join(stateDir, 'reader.sha256'), 'utf8').trim().replace(/ \w+$/, ' 00'));
+  assert.equal(installReader(source, opts), true);
+
+  // A failed build leaves the installed reader alone.
+  const broken = path.join(base, 'broken.c');
+  fs.writeFileSync(broken, 'int main(void) { return }\n');
+  assert.throws(() => installReader(broken, opts));
+  assert.equal(readerCdHash(app), cdhash);
+  assert.ok(!fs.existsSync(path.join(stateDir, 'reader-build.app')));
+
+  // ~/Applications must be ours and not writable by others, and not a link.
+  fs.chmodSync(apps, 0o775);
+  fs.writeFileSync(path.join(stateDir, 'reader.sha256'), 'stale');
+  assert.throws(() => installReader(source, opts), /other users can't write/);
+  fs.chmodSync(apps, 0o755);
+  const linked = path.join(base, 'LinkedApplications');
+  fs.symlinkSync(apps, linked);
+  assert.throws(() => installReader(source, { ...opts, app: path.join(linked, 'imessage-agent-reader.app') }), /folder you own/);
+
+  // In the Mac app, nothing is built: the bundled reader must be intact.
+  assert.equal(installReader(source, { ...opts, inApp: true }), false);
+  assert.throws(() => installReader(source, { ...opts, app: path.join(base, 'missing.app'), inApp: true }), /missing or damaged/);
+});

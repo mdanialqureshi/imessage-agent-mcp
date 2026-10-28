@@ -1,8 +1,15 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export type InterpreterName = 'codex' | 'claude';
+
+/**
+ * The Mac app this copy runs inside (imessage-agent.app, which bundles Node, this source and
+ * a prebuilt reader), or null when it runs from a clone of the repo.
+ */
+export const appBundle = /^(\/.+\.app)\/Contents\/Resources\/app\/src\/config\.ts$/.exec(fileURLToPath(import.meta.url))?.[1] ?? null;
 
 export interface Config {
   /** Which subscription CLI interprets conversations: Claude Code (default) or Codex. */

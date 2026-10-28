@@ -21,3 +21,6 @@ snapshot*/
 *.storedata
 
 .DS_Store
+
+# Mac app builds
+dist/

@@ -25,19 +25,37 @@ This reads Messages read-only, understands the conversations, and keeps a list o
                                         └──► claude -p or codex exec (your subscription)
 ```
 
-- **The reader** is a tiny app (`~/Applications/imessage-agent-reader.app`) built from one C file. It copies Messages and Contacts into a private folder and does nothing else.
+- **The reader** is a tiny program built from one C file. It copies Messages and Contacts into a private folder and does nothing else.
 - **The background service** reads that copy. Every 2 hours it interprets new messages with your Claude or ChatGPT subscription (no API keys), and it keeps the list.
 - **The bridge** is what your apps launch. It relays requests to the service over a socket only your user account can open.
 
 \*Verified: Claude Code, Codex and the Claude desktop app on the Mac, and Dot through the `call` command. Not yet verified: Dot seeing the tools natively, and Claude from your phone ([roadmap](docs/roadmap.md)).
 
+### Why Full Disk Access
+
+macOS keeps your Messages history in a protected folder that no program can read without **Full Disk Access**, and there's no other way for a program to read it. So exactly one tiny program, **imessage-agent-reader**, gets it. It only copies Messages and Contacts into a private folder in `~/Library/Application Support/imessage-agent-mcp`, and opening it by hand does the same, nothing more. Nothing else needs it: not the app, not `node`, not your other apps. (The debugging commands `interpret` and `export` read Messages directly, so they only work from a terminal you've given Full Disk Access yourself.)
+
 ## Setup
 
-You need macOS with Messages in iCloud, [Node.js](https://nodejs.org) 23.6+ (`brew install node`), and [Claude Code](https://claude.com/claude-code) or [Codex](https://github.com/openai/codex) signed in with a subscription.
+You need macOS 13 or newer with Messages in iCloud, and [Claude Code](https://claude.com/claude-code) or [Codex](https://github.com/openai/codex) signed in with your subscription. There are two ways to install it; both run the same code.
+
+### Option 1: the Mac app (easiest)
+
+1. Download `imessage-agent-<version>.dmg` from [Releases](https://github.com/mdanialqureshi/imessage-agent-mcp/releases/latest), open it, and drag **imessage-agent** into Applications.
+2. Open it. macOS says it can't verify the app, because it isn't notarized by Apple (that needs a paid developer account). Click **Done**, then go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. You only do this once.
+3. A setup window walks you through the rest: choose Claude or ChatGPT, install the background service, **drag the reader's icon from the window into Full Disk Access**, and connect your apps.
+
+It lives in your menu bar, where you can see what needs attention, check for new messages, and change settings. Quitting it doesn't stop the background service.
+
+**Updating:** replace the app in Applications with the new version and open it. The new reader is a new program to macOS, so the setup window asks you to switch on its Full Disk Access again.
+
+### Option 2: from the command line
+
+Needs [Node.js](https://nodejs.org) 23.6+ (`brew install node`) and Apple's Command Line Tools (Homebrew already installed them).
 
 **Let an AI assistant do it.** Paste this into Claude Code or Codex (swap **claude** for **codex** to use your ChatGPT plan):
 
-> Set up imessage-agent-mcp on my Mac by following the "Setup" section of https://github.com/mdanialqureshi/imessage-agent-mcp. Use the **claude** interpreter. Clone it into ~/imessage-agent-mcp, run `npm ci`, then `node src/cli.ts setup --interpreter claude`. When it asks for Full Disk Access, tell me exactly what to do, wait for me, then run `node src/cli.ts doctor` until everything is ✅. Then show me how to connect my agents. Don't read or quote my messages while doing this.
+> Set up imessage-agent-mcp on my Mac by following "Option 2: from the command line" in https://github.com/mdanialqureshi/imessage-agent-mcp. Use the **claude** interpreter. Clone it into ~/imessage-agent-mcp, run `npm ci`, then `node src/cli.ts setup --interpreter claude`. When it asks for Full Disk Access, tell me exactly what to do, wait for me, then run `node src/cli.ts doctor` until everything is ✅. Then show me how to connect my agents. Don't read or quote my messages while doing this.
 
 **Or do it yourself:**
 
@@ -48,36 +66,32 @@ npm ci
 node src/cli.ts setup --interpreter claude    # or: --interpreter codex
 ```
 
-`setup` checks your interpreter, builds the reader (with Apple's Command Line Tools, which Homebrew already installed), and installs the background service. It then connects the apps you have (ChatGPT desktop/Codex, Claude desktop, Claude Code, Cursor; choose with `--apps`) and walks you through Full Disk Access. Run `node src/cli.ts doctor` any time to check everything.
+`setup` checks your interpreter, builds the reader as a small app in `~/Applications`, and installs the background service. It then connects the apps you have (ChatGPT desktop/Codex, Claude desktop, Claude Code, Cursor; choose with `--apps`) and walks you through Full Disk Access:
 
-### Full Disk Access
-
-**Why it's needed:** macOS keeps your Messages history in a protected folder that no program can read without Full Disk Access, and there's no other way for a program to read it. So exactly one tiny program, the reader, gets it. It only copies Messages and Contacts into a private folder in `~/Library/Application Support/imessage-agent-mcp`. Opening it by hand does the same, nothing more. Nothing else needs it in normal use, and never give it to `node`. (The debugging commands `interpret` and `export` read Messages directly, so they only work from a terminal you've given Full Disk Access yourself.)
-
-macOS makes you switch it on yourself:
-
-1. `setup` opens **System Settings → Privacy & Security → Full Disk Access** and shows **imessage-agent-reader** in Finder. It lives in the Applications folder inside your home folder (`~/Applications`).
+1. It opens **System Settings → Privacy & Security → Full Disk Access** and shows **imessage-agent-reader** in Finder.
 2. Drag it into the list and switch it on. Or click **+**, press **⌘⇧H**, open **Applications** and choose **imessage-agent-reader**.
-3. If `node` is in the list from an older version of this project, switch it off.
-4. `node src/cli.ts doctor` should show ✅ Full Disk Access.
+3. If `node` or an older **imessage-agent-reader** is in the list, remove it.
+4. `node src/cli.ts doctor` should show ✅ for everything. Run it any time.
 
-If an update rebuilds the reader, macOS treats it as a new program. When that happens, `doctor` shows ❌; add the reader again and remove the old entry.
-
-### Updating
+**Updating:**
 
 ```sh
 cd ~/imessage-agent-mcp && git pull && npm ci
 node src/cli.ts install-service    # restarts the service; rebuilds the reader only if it changed
 ```
 
+If the reader was rebuilt, `doctor` shows ❌ Full Disk Access: add it again and remove the old entry.
+
+You can switch between the two options at any time: whichever you set up last is the one that runs, and your items are kept.
+
 ## Connect your agents
 
-Restart the desktop apps after `setup`. Agents on your phone can reach your Mac only while it's on and awake, with the app running.
+Restart the desktop apps after connecting them. Agents on your phone can reach your Mac only while it's on and awake, with the app running.
 
-- **Dot:** in the ChatGPT desktop app, open your Dot's profile → **Computers** → **Allow access**. Then tell your Dot: *"For my texts, use the imessage tools on my Mac. If they aren't in your tool list, run `node <repo>/src/cli.ts call` to list them and `node <repo>/src/cli.ts call <tool> '<json args>'` to use one."* `doctor` prints that command with your real path. If Dot asks for approval, approve only that command.
+- **Dot:** in the ChatGPT desktop app, open your Dot's profile → **Computers** → **Allow access**. Then tell your Dot: *"For my texts, use the imessage tools on my Mac. If they aren't in your tool list, run `<call command>` to list them and `<call command> <tool> '<json args>'` to use one."* The app's setup window has this message ready to copy, with the real command; from the command line, `doctor` prints it. If Dot asks for approval, approve only that command.
 - **Claude desktop:** ask *"Use the imessage tools: what do I owe people?"*
-- **Claude Code, Codex, Cursor:** the tools are ready after `setup`.
-- **Any other MCP app:** add a stdio server that runs `node <repo>/src/cli.ts connect` ([examples](docs/agent-setup.md)).
+- **Claude Code, Codex, Cursor:** the tools are ready once connected.
+- **Any other MCP app:** add a stdio server that runs the bridge, `node <repo>/src/cli.ts connect` ([examples](docs/agent-setup.md)).
 
 ## Set a cadence
 
@@ -101,11 +115,11 @@ No tool sends, edits or deletes messages. Agents that run commands but don't loa
 
 ## Interpreter
 
-The interpreter is the model that reads your new messages in the background: Claude Code (default) or Codex. Both scored 69/69 on the live eval. Switch with `node src/cli.ts use codex` or `use claude`.
+The interpreter is the model that reads your new messages in the background: Claude Code (default) or Codex. Both scored 69/69 on the live eval. Switch in the app's Settings, or with `node src/cli.ts use codex` or `use claude`.
 
 ## Configuration
 
-`~/Library/Application Support/imessage-agent-mcp/config.json`:
+The app's Settings change the common ones. All of them are in `~/Library/Application Support/imessage-agent-mcp/config.json` (or `node src/cli.ts config set <key> <value>`):
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -124,15 +138,20 @@ The interpreter is the model that reads your new messages in the background: Cla
 - Your home folder should be on APFS (the macOS default). Elsewhere the reader makes full copies, and a very large history may not finish within its 2-minute limit.
 - Attachments and images aren't read yet.
 - The model can be wrong: `node src/cli.ts brief --all` shows low-confidence items, and `dismissed` rejects false ones.
+- The app isn't notarized by Apple, so macOS asks you to approve it once (see Option 1).
 
 ## Uninstall
+
+**App:** Settings → **Uninstall…**, then quit it and move it to the Trash.
+
+**Command line:**
 
 ```sh
 node src/cli.ts uninstall                # disconnects your apps, removes the service, the reader and its copy; keeps your items
 node src/cli.ts uninstall --delete-data  # also deletes your items and logs
 ```
 
-Then remove `imessage-agent-reader` from Full Disk Access (uninstall deletes the app itself).
+Either way, then remove `imessage-agent-reader` from Full Disk Access.
 
 ## Development
 
@@ -140,6 +159,8 @@ Then remove `imessage-agent-reader` from Full Disk Access (uninstall deletes the
 npm test                              # synthetic tests (no real data, no model calls)
 npm run eval                          # live eval of both interpreters on synthetic chats
 npm run safety                        # secret and personal-data scan (also the pre-commit hook)
+npm run build:app                     # build the Mac app, .dmg and .zip into dist/ (needs Swift from the Command Line Tools)
+npm run test:app                      # build the app for this Mac and test the build
 git config core.hooksPath .githooks   # enable the pre-commit and pre-push checks
 ```
 

@@ -1,8 +1,9 @@
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { paths } from '../config.ts';
+import { appBundle, paths } from '../config.ts';
 
 /**
  * The background service never opens Messages or Contacts itself. imessage-agent-reader
@@ -14,11 +15,12 @@ export const READER_LABEL = 'com.imessage-agent-mcp.reader';
 export const usingMirror = () => process.env.IMESSAGE_AGENT_MIRROR === '1';
 
 /**
- * Built by setup as a small app in ~/Applications, where Finder and the Full Disk Access file
- * picker can find it (~/Library is hidden). Rebuilding changes its signature, so macOS asks
- * for access again.
+ * The reader is a small app. The Mac app ships one prebuilt inside it; a clone builds one in
+ * ~/Applications, where Finder and the Full Disk Access file picker can find it (~/Library is
+ * hidden). A new build has a new signature, so macOS asks for access again.
  */
-export const readerApp = () => path.join(os.homedir(), 'Applications', 'imessage-agent-reader.app');
+export const readerApp = () =>
+  appBundle ? path.join(appBundle, 'Contents/Helpers/imessage-agent-reader.app') : path.join(os.homedir(), 'Applications', 'imessage-agent-reader.app');
 export const readerBinary = (app = readerApp()) => path.join(app, 'Contents/MacOS/imessage-agent-reader');
 
 /**
@@ -39,6 +41,7 @@ export const READER_INFO = `<?xml version="1.0" encoding="UTF-8"?>
   <key>CFBundleIdentifier</key><string>${READER_LABEL}</string>
   <key>CFBundleName</key><string>imessage-agent-reader</string>
   <key>CFBundleExecutable</key><string>imessage-agent-reader</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSBackgroundOnly</key><true/>
@@ -48,13 +51,86 @@ export const READER_INFO = `<?xml version="1.0" encoding="UTF-8"?>
 
 /**
  * Compiles the reader into a new app at `app` and signs it. Tests pass `-DREADER_HOME=…` to
- * aim it at a fake home.
+ * aim it at a fake home. The Mac app's build gives it the app's icon, so it's easy to spot in
+ * the Full Disk Access list.
  */
-export function compileReader(source: string, app: string, defines: string[] = []): void {
+export function compileReader(source: string, app: string, defines: string[] = [], icon?: string): void {
   fs.mkdirSync(path.dirname(readerBinary(app)), { recursive: true });
   fs.writeFileSync(path.join(app, 'Contents/Info.plist'), READER_INFO);
+  if (icon) {
+    fs.mkdirSync(path.join(app, 'Contents/Resources'), { mode: 0o755 });
+    fs.copyFileSync(icon, path.join(app, 'Contents/Resources/AppIcon.icns'));
+    fs.chmodSync(path.join(app, 'Contents/Resources'), 0o755);
+    fs.chmodSync(path.join(app, 'Contents/Resources/AppIcon.icns'), 0o644);
+  }
   execFileSync('/usr/bin/cc', [...defines, ...READER_BUILD.cc, '-o', readerBinary(app), source], { stdio: ['ignore', 'pipe', 'pipe'] });
+  // Explicit modes, whatever the umask: nobody else may be able to swap the program out.
+  for (const dir of [app, path.join(app, 'Contents'), path.dirname(readerBinary(app))]) fs.chmodSync(dir, 0o755);
+  fs.chmodSync(path.join(app, 'Contents/Info.plist'), 0o644);
+  fs.chmodSync(readerBinary(app), 0o755);
   execFileSync('/usr/bin/codesign', [...READER_BUILD.codesign, app], { stdio: 'ignore' });
+}
+
+/**
+ * The reader's code hash when its signature is intact, else null. macOS ties Full Disk Access
+ * to this hash, so a changed or damaged reader shows up here.
+ */
+export function readerCdHash(app = readerApp()): string | null {
+  if (spawnSync('/usr/bin/codesign', ['--verify', '--strict', app], { stdio: 'ignore' }).status !== 0) return null;
+  const info = spawnSync('/usr/bin/codesign', ['-dvvv', app], { encoding: 'utf8' });
+  return /^CDHash=([0-9a-f]+)$/m.exec(info.stderr ?? '')?.[1] ?? null;
+}
+
+/** A clone's reader, which the Mac app replaces with its own. */
+export const CLI_READER_APP = path.join(os.homedir(), 'Applications', 'imessage-agent-reader.app');
+
+/**
+ * Makes sure the reader is in place. The app ships its own, so a reader left by a clone is
+ * removed. A clone compiles one with Apple's Command Line Tools, only when its source changed
+ * or the installed one isn't exactly what was built: a new build has a new signature, so macOS
+ * asks for Full Disk Access again. Returns true if it built one.
+ */
+export function installReader(source: string, { app = readerApp(), stateDir = paths.stateDir, inApp = Boolean(appBundle) } = {}): boolean {
+  fs.rmSync(path.join(stateDir, 'bin'), { recursive: true, force: true }); // Where older versions kept it.
+  if (inApp) {
+    if (!readerCdHash(app)) throw new Error('the reader inside imessage-agent.app is missing or damaged; download the app again');
+    fs.rmSync(CLI_READER_APP, { recursive: true, force: true });
+    return false;
+  }
+  const stamp = path.join(stateDir, 'reader.sha256'); // Outside the app: changing the app breaks its signature.
+  const hash = createHash('sha256').update(fs.readFileSync(source)).update(JSON.stringify(READER_BUILD)).update(READER_INFO).digest('hex');
+  const [built, cdhash] = fs.existsSync(stamp) ? fs.readFileSync(stamp, 'utf8').trim().split(' ') : [];
+  if (built === hash && cdhash && readerCdHash(app) === cdhash) return false;
+  if (spawnSync('/usr/bin/xcode-select', ['-p'], { stdio: 'ignore' }).status !== 0) {
+    throw new Error("its reader is built with Apple's Command Line Tools: run `xcode-select --install`, then setup again");
+  }
+  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  privateApplicationsDir(path.dirname(app));
+  const tmp = path.join(stateDir, 'reader-build.app'); // Usually the same disk as ~/Applications, so the move is a rename.
+  fs.rmSync(tmp, { recursive: true, force: true });
+  try {
+    compileReader(source, tmp);
+    const fresh = readerCdHash(tmp);
+    if (!fresh) throw new Error("the reader's signature didn't verify after building it");
+    fs.rmSync(app, { recursive: true, force: true });
+    fs.renameSync(tmp, app);
+    fs.writeFileSync(stamp, `${hash} ${fresh}\n`);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  return true;
+}
+
+/** ~/Applications must be a real folder of ours that nobody else can write to. */
+function privateApplicationsDir(dir: string): void {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { mode: 0o755 });
+    fs.chmodSync(dir, 0o755);
+  }
+  const st = fs.lstatSync(dir);
+  if (!st.isDirectory() || st.uid !== process.getuid!() || st.mode & 0o022) {
+    throw new Error(`${dir} must be a folder you own that other users can't write to (try: chmod go-w "${dir}")`);
+  }
 }
 
 export interface ReaderStatus {

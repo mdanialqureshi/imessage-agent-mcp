@@ -1,6 +1,6 @@
 {
   "name": "imessage-agent-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server that turns your iMessages into commitments, plans and replies-owed for any AI agent (ChatGPT, Claude, Gemini). Runs locally on your Mac.",
   "main": "src/cli.ts",
   "scripts": {
@@ -9,7 +9,9 @@
     "test": "node --test \"test/*.test.ts\"",
     "safety": "node scripts/check-public-safety.mjs",
     "safety:all": "node scripts/check-public-safety.mjs --all --check-authors",
-    "eval": "node test/eval/run-eval.ts"
+    "eval": "node test/eval/run-eval.ts",
+    "build:app": "node scripts/build-app.mjs",
+    "test:app": "node scripts/build-app.mjs --arch native --no-package --out test/.tmp/app && IMESSAGE_AGENT_APP=test/.tmp/app/imessage-agent.app node --test test/app.test.ts"
   },
   "keywords": [
     "mcp",

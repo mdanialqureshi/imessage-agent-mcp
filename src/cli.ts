@@ -1,17 +1,16 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildBrief, formatItem } from './brief.ts';
-import { type Config, configPath, ensureStateDir, INTERPRETERS, type InterpreterName, loadConfig, loadConfigDefaults, paths, saveConfig } from './config.ts';
+import { appBundle, type Config, configPath, ensureStateDir, INTERPRETERS, type InterpreterName, loadConfig, loadConfigDefaults, paths, saveConfig } from './config.ts';
 import { interpretNow } from './interpret/run.ts';
 import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
 import { Conversations } from './messages/conversations.ts';
-import { compileReader, READER_BUILD, READER_INFO, READER_LABEL, readerApp, readerBinary, readerStatus, STALE_MS } from './messages/mirror.ts';
+import { CLI_READER_APP, installReader, READER_LABEL, readerApp, readerBinary, readerCdHash, readerStatus, STALE_MS } from './messages/mirror.ts';
 import { APPS, which } from './apps.ts';
 import { bridge, callTool, type ServiceHealth, serviceHealth } from './bridge.ts';
 import { serveSocket, socketPath } from './server.ts';
@@ -41,47 +40,31 @@ function check(label: string, fn: () => string): boolean {
 
 /** What desktop apps launch: the permission-less bridge to the background service. */
 function bridgeCommand(): string[] {
-  // The stable Homebrew/nvm symlink survives Node upgrades better than the versioned binary.
-  return [which('node') ?? process.execPath, cliPath, 'connect'];
+  return [nodePath(), cliPath, 'connect'];
 }
 
+/** The app's own Node; otherwise the stable Homebrew/nvm symlink, which survives Node upgrades. */
+const nodePath = () => (appBundle ? process.execPath : (which('node') ?? process.execPath));
+
 function fdaHelp(): string {
+  const find = appBundle
+    ? `  2. Open imessage-agent and drag imessage-agent-reader from its setup window into the list,
+     or click +, press ⌘⇧G, paste the path below and click Open:
+     ${readerApp()}`
+    : `  2. Drag in imessage-agent-reader from the Applications folder in your home folder,
+     or click +, press ⌘⇧H, open Applications and choose imessage-agent-reader.
+     (It's ${readerApp()})`;
   return `Give imessage-agent's reader Full Disk Access (macOS requires you to do this yourself):
   1. System Settings → Privacy & Security → Full Disk Access
-  2. Drag in imessage-agent-reader from the Applications folder in your home folder,
-     or click +, press ⌘⇧H, open Applications and choose imessage-agent-reader.
-     (It's ${readerApp()})
-  3. Make sure its switch is on.
+${find}
+  3. Make sure its switch is on. If there's an older imessage-agent-reader entry, remove it.
   The reader only copies Messages and Contacts into imessage-agent's private folder; it takes no
   input and can't be pointed at anything else. Node, your terminal and your apps don't need access.
   If you gave node Full Disk Access for this earlier, you can turn that off.`;
 }
 
 const readerSource = path.join(path.dirname(cliPath), '..', 'helper', 'reader.c');
-
-/**
- * Compiles the reader with Apple's Command Line Tools, only when its source changed: a new
- * build has a new signature, so macOS asks for Full Disk Access again. Returns true if built.
- */
-function buildReader(): boolean {
-  const app = readerApp();
-  const stamp = path.join(paths.stateDir, 'reader.sha256'); // Outside the app: changing the app breaks its signature.
-  const hash = createHash('sha256').update(fs.readFileSync(readerSource)).update(JSON.stringify(READER_BUILD)).update(READER_INFO).digest('hex');
-  fs.rmSync(path.join(paths.stateDir, 'bin'), { recursive: true, force: true }); // Where older versions kept it.
-  if (fs.existsSync(readerBinary()) && fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8').trim() === hash) return false;
-  if (spawnSync('/usr/bin/xcode-select', ['-p'], { stdio: 'ignore' }).status !== 0) {
-    throw new Error("its reader is built with Apple's Command Line Tools: run `xcode-select --install`, then setup again");
-  }
-  ensureStateDir();
-  const tmp = path.join(paths.stateDir, 'reader-build.app'); // Same disk as ~/Applications, so the move is atomic.
-  fs.rmSync(tmp, { recursive: true, force: true });
-  compileReader(readerSource, tmp);
-  fs.mkdirSync(path.dirname(app), { recursive: true });
-  fs.rmSync(app, { recursive: true, force: true });
-  fs.renameSync(tmp, app);
-  fs.writeFileSync(stamp, hash + '\n');
-  return true;
-}
+const buildReader = () => installReader(readerSource);
 
 async function doctor(): Promise<void> {
   const config = loadConfig();
@@ -94,7 +77,8 @@ async function doctor(): Promise<void> {
   });
   if (health) {
     const ok = check('Full Disk Access', () => {
-      if (!fs.existsSync(readerBinary())) throw new Error('the reader is missing (run: node src/cli.ts setup)');
+      if (!fs.existsSync(readerBinary())) throw new Error(`the reader is missing (${appBundle ? 'download the app again' : 'run: node src/cli.ts setup'})`);
+      if (!readerCdHash()) throw new Error(`the reader was changed or damaged (${appBundle ? 'download the app again' : 'run: node src/cli.ts setup to rebuild it'})`);
       if (!health.canReadMessages) {
         const status = readerStatus();
         const log = path.join(paths.stateDir, 'logs/reader.log');
@@ -130,7 +114,7 @@ async function doctor(): Promise<void> {
 }
 
 /** The exact `call` command for this install, to paste into an agent's instructions. */
-const callCommand = () => [which('node') ?? process.execPath, cliPath].map(shellQuote).join(' ') + ' call';
+const callCommand = () => [nodePath(), cliPath].map(shellQuote).join(' ') + ' call';
 const shellQuote = (p: string) => (/^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`);
 
 function waitForService(ms: number): Promise<ServiceHealth | null> {
@@ -201,7 +185,7 @@ async function setup(): Promise<void> {
     console.log(fdaHelp().replace(/^/gm, '   '));
     if (!flag('no-open')) {
       const pane = spawnSync('/usr/bin/open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles']).status === 0;
-      const shown = spawnSync('/usr/bin/open', ['-R', readerApp()]).status === 0;
+      const shown = spawnSync('/usr/bin/open', ['-R', readerApp()]).status === 0; // Inside the app, Finder opens its package.
       if (pane && shown) console.log('   Opened Full Disk Access in System Settings and showed imessage-agent-reader in Finder: drag it into the list.');
     }
     if (process.stdout.isTTY && !flag('no-wait')) {
@@ -252,7 +236,7 @@ function uninstall(): void {
     fs.rmSync(paths.stateDir, { recursive: true, force: true });
     console.log(`Deleted ${paths.stateDir}`);
   } else console.log(`Kept your items in ${paths.stateDir} (add --delete-data to remove them).`);
-  console.log('You can also remove imessage-agent-reader from Full Disk Access in System Settings.');
+  console.log(`You can also remove imessage-agent-reader from Full Disk Access in System Settings.${appBundle ? ' Then move imessage-agent to the Trash.' : ''}`);
 }
 
 /**
@@ -262,13 +246,20 @@ function uninstall(): void {
 function interpreterStatus(name: InterpreterName): string {
   if (name === 'claude') {
     if (process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is set in this shell, so terminal runs would bill the API; unset it');
-    const status = JSON.parse(execFileSync('claude', ['auth', 'status'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
+    const res = spawnSync('claude', ['auth', 'status'], { encoding: 'utf8', timeout: 30_000 });
+    if (res.error) throw new Error((res.error as NodeJS.ErrnoException).code === 'ENOENT' ? 'not installed' : "didn't answer");
+    let status: { loggedIn?: boolean; authMethod?: string } = {};
+    try {
+      status = JSON.parse(res.stdout);
+    } catch {
+      // Older versions, or not signed in: treated as signed out.
+    }
     if (!status.loggedIn) throw new Error('not signed in (run: claude)');
     if (status.authMethod !== 'claude.ai') throw new Error(`signed in via ${status.authMethod}: this would bill API usage, sign in with your Claude plan instead`);
     return 'signed in with a Claude plan';
   }
   // codex prints its login status on stderr.
-  const res = spawnSync('codex', ['login', 'status'], { encoding: 'utf8' });
+  const res = spawnSync('codex', ['login', 'status'], { encoding: 'utf8', timeout: 30_000 });
   if (res.error) throw new Error('not installed');
   // Never echo the status line: for API-key logins it contains part of the key.
   if (res.status !== 0 || !/ChatGPT/i.test(`${res.stdout}${res.stderr}`)) {
@@ -286,7 +277,15 @@ function useInterpreter(name: string | undefined): void {
     process.exitCode = 1;
     return;
   }
-  // Read the raw file so `use` can also repair a config with an invalid interpreter.
+  if (!editConfig({ interpreter: name as InterpreterName })) return;
+  console.log(`Interpreter set to ${name}. The background service uses it from its next run.`);
+}
+
+/**
+ * Saves changes to config.json, reading the raw file so this can also repair a config with an
+ * invalid interpreter. False (with exitCode set) if the file isn't valid JSON.
+ */
+function editConfig(changes: Partial<Config>): boolean {
   let current: Partial<Config> = {};
   if (fs.existsSync(configPath())) {
     try {
@@ -295,11 +294,119 @@ function useInterpreter(name: string | undefined): void {
       // Never fall back to defaults here: that would silently drop settings like privateContacts.
       console.log(`${configPath()} isn't valid JSON. Fix it (or delete it to start over), then run this again.`);
       process.exitCode = 1;
-      return;
+      return false;
     }
   }
-  saveConfig({ ...loadConfigDefaults(), ...current, interpreter: name as InterpreterName });
-  console.log(`Interpreter set to ${name}. The background service uses it from its next run.`);
+  saveConfig({ ...loadConfigDefaults(), ...current, ...changes });
+  return true;
+}
+
+/** `config set <key> <json>`: one setting, checked against its type (the interpreter goes through `use`). */
+function setConfig(key: string | undefined, raw: string | undefined): void {
+  const defaults = loadConfigDefaults() as unknown as Record<string, unknown>;
+  const usage = `Usage: node src/cli.ts config set <${Object.keys(defaults).filter((k) => k !== 'interpreter').join('|')}> <json value>`;
+  let value: unknown;
+  try {
+    value = raw === undefined ? undefined : JSON.parse(raw);
+  } catch {
+    value = undefined;
+  }
+  const expected = key && key !== 'interpreter' && Object.hasOwn(defaults, key) ? defaults[key] : undefined;
+  const valid =
+    key === 'model'
+      ? value === null || (typeof value === 'string' && /^[\w.:-]{1,100}$/.test(value))
+      : typeof expected === 'number'
+        ? Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 100_000
+        : typeof expected === 'boolean'
+          ? typeof value === 'boolean'
+          : Array.isArray(expected)
+            ? Array.isArray(value) && value.length <= 1000 && value.every((v) => typeof v === 'string' && v.trim() && v.length <= 200)
+            : false;
+  if (!key || !valid) {
+    console.log(usage);
+    process.exitCode = 1;
+    return;
+  }
+  if (Array.isArray(value)) value = value.map((v: string) => v.trim());
+  if (editConfig({ [key]: value } as Partial<Config>)) console.log(`${key} saved. The background service uses it from its next run.`);
+}
+
+/** Which copy of cli.ts the installed service runs, or null if it isn't installed. */
+function installedProgram(): string | null {
+  if (!fs.existsSync(plistPath)) return null;
+  const m = /<key>ProgramArguments<\/key>\s*<array>\s*<string>[^<]*<\/string>\s*<string>([^<]*)<\/string>/.exec(fs.readFileSync(plistPath, 'utf8'));
+  return m ? m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&') : null;
+}
+
+const version = (): string => JSON.parse(fs.readFileSync(path.join(path.dirname(cliPath), '..', 'package.json'), 'utf8')).version;
+
+/**
+ * `status --json`: machine-readable state for the Mac app. `--interpreters` and `--apps` add
+ * the slower checks (each runs a CLI). Never includes message content or account details.
+ */
+async function statusJson(): Promise<void> {
+  const config = loadConfig();
+  const program = installedProgram();
+  const health = await serviceHealth(socketPath());
+  const status = readerStatus();
+  const access = !health
+    ? 'unknown'
+    : health.canReadMessages
+      ? 'ok'
+      : status?.ok && Date.now() - status.at >= STALE_MS
+        ? 'stale'
+        : status?.error === 'EFAIL'
+          ? 'failed'
+          : 'needed';
+  const store = Store.open();
+  const items = { open: store.listItems({ status: ['open'] }).length, lastInterpretedAt: store.getMeta('last_interpreted_at') ?? null };
+  store.close();
+  const out: Record<string, unknown> = {
+    mode: appBundle ? 'app' : 'cli',
+    version: version(),
+    install: { state: !program ? 'none' : program === cliPath ? 'this' : 'other', program },
+    service: { running: Boolean(health) },
+    reader: {
+      path: readerApp(),
+      valid: Boolean(readerCdHash()),
+      access,
+      ...(health?.canReadMessages ? { messages: health.messages, contacts: health.contacts } : {}),
+    },
+    interpreter: config.interpreter,
+    items,
+    callCommand: callCommand(),
+    config: { autoInterpretMinutes: config.autoInterpretMinutes, firstRunLookbackDays: config.firstRunLookbackDays, privateContacts: config.privateContacts },
+  };
+  if (flag('interpreters')) {
+    out.interpreters = INTERPRETERS.map((name) => {
+      try {
+        return { name, ok: true, detail: interpreterStatus(name) };
+      } catch (err: any) {
+        return { name, ok: false, detail: String(err.message).split('\n')[0] };
+      }
+    });
+  }
+  if (flag('apps')) {
+    out.apps = APPS.map((app) => {
+      const installed = app.installed();
+      return { id: app.id, name: app.name, installed, connected: installed && app.registered() };
+    });
+  }
+  console.log(JSON.stringify(out, null, flag('json') ? undefined : 2));
+}
+
+/** Connects or disconnects one app (an id from APPS), for the Mac app's toggles. */
+function connectApp(id: string | undefined, connect: boolean): void {
+  const app = APPS.find((a) => a.id === id);
+  if (!app) throw new Error(`Usage: node src/cli.ts ${connect ? 'connect-app' : 'disconnect-app'} <${APPS.map((a) => a.id).join('|')}>`);
+  if (connect) {
+    if (!app.installed()) throw new Error(`${app.name} isn't installed`);
+    app.register(bridgeCommand());
+    console.log(`Connected ${app.name}. Restart it to load the connection.`);
+  } else {
+    app.unregister();
+    console.log(`Disconnected ${app.name}.`);
+  }
 }
 
 /** Prints what the interpreter would see, for review and labeling. */
@@ -404,8 +511,8 @@ function uninstallService(): void {
     fs.rmSync(file, { force: true });
   }
   fs.rmSync(socketPath(), { force: true });
-  for (const name of ['mirror', 'reader-status', 'reader.sha256', 'bin']) fs.rmSync(path.join(paths.stateDir, name), { recursive: true, force: true });
-  fs.rmSync(readerApp(), { recursive: true, force: true });
+  for (const name of ['mirror', 'reader-status', 'reader.sha256', 'reader-build.app', 'bin']) fs.rmSync(path.join(paths.stateDir, name), { recursive: true, force: true });
+  fs.rmSync(CLI_READER_APP, { recursive: true, force: true }); // The app's own reader goes when the app is deleted.
   console.log(`Removed the background service (${LABEL}), its reader and its copy of Messages.`);
 }
 
@@ -469,6 +576,14 @@ async function main(): Promise<void> {
       return installService();
     case 'uninstall-service':
       return uninstallService();
+    case 'status':
+      return statusJson();
+    case 'connect-app':
+    case 'disconnect-app':
+      return connectApp(rest[0], command === 'connect-app');
+    case 'config':
+      if (rest[0] !== 'set') throw new Error('Usage: node src/cli.ts config set <key> <json value>');
+      return setConfig(rest[1], rest[2]);
     default:
       console.log(`imessage-agent-mcp: your iMessage commitments for any AI agent, running only on this Mac.
 
@@ -479,6 +594,10 @@ Setup
                        Install the background service and connect your apps
   doctor               Check the service, permissions, interpreter and connected apps
   use <claude|codex>   Choose which subscription CLI reads your messages
+  config set <key> <json>
+                       Change one setting, e.g. config set autoInterpretMinutes 60
+  connect-app <id> | disconnect-app <id>
+                       Connect or disconnect one app (chatgpt, claude-desktop, claude-code, cursor)
   uninstall [--delete-data]
                        Disconnect apps and remove the service
 
@@ -494,6 +613,8 @@ Plumbing
   serve [--no-auto]    The background service (what launchd runs)
   install-service | uninstall-service
                        Just the launchd service
+  status [--json] [--interpreters] [--apps]
+                       Machine-readable status (what the Mac app shows)
   interpret [--dry-run] [--interpreter claude|codex]
   export [--days 7] [--out file]
                        Debugging from a terminal; these need Full Disk Access for the terminal itself`);

@@ -27,3 +27,6 @@ jobs:
       - name: Public-repo safety (all files, commit authors and messages)
         run: npm run safety:all
       - run: npm test
+      - name: Build and test the Mac app
+        if: runner.os == 'macOS'
+        run: npm run test:app

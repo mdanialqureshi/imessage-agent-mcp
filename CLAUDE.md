@@ -14,14 +14,15 @@ The code reads private message history, and the repo is shared publicly. **Nothi
 
 ## Layout
 
-- `helper/reader.c` — the only part with Full Disk Access: copies `chat.db` and Contacts into the state dir; built as `~/Applications/imessage-agent-reader.app`, its own launchd job
+- `helper/reader.c` — the only part with Full Disk Access: copies `chat.db` and Contacts into the state dir; its own launchd job. A clone builds it as `~/Applications/imessage-agent-reader.app`; the Mac app ships one in `Contents/Helpers`
+- `app/` — the Mac app (SwiftUI menu bar + setup window). It holds no permissions and only runs the bundled CLI (`status --json`, `install-service`, `connect-app`, …); `scripts/build-app.mjs` builds it with the pinned Node, `test/app.test.ts` checks a build
 - `src/messages/` — reading `chat.db` and Contacts (the reader's copy, in the service), conversation windows, privacy filters
 - `src/interpret/` — prompt, output schema, CLI runners, pipeline
 - `src/store.ts` — local state (items, runs) in `~/Library/Application Support/imessage-agent-mcp/`
 - `src/server.ts` — MCP tools and the background service (Unix socket only)
 - `src/bridge.ts` — `connect`, the stdio bridge apps launch
 - `src/apps.ts` — registering the bridge with ChatGPT/Codex, Claude desktop, Claude Code, Cursor
-- `src/cli.ts` — entry point
+- `src/cli.ts` — entry point, for both the terminal and the Mac app (`appBundle` in `src/config.ts` tells them apart)
 - `test/` — synthetic fixtures and tests (`npm test`)
 
 ## Conventions
