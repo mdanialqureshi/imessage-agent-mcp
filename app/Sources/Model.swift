@@ -45,6 +45,7 @@ final class Model: ObservableObject {
     Task {
       await refresh(full: true)
       await repairIfMoved()
+      removeLeftoverBackups()
       await restartServiceIfUpdated()
       await checkForUpdates(manual: false)
     }
@@ -63,6 +64,20 @@ final class Model: ObservableObject {
   }
 
   private static let lastUpdateCheck = "lastUpdateCheck"
+  /// The copy kept while an update replaces the app; a leftover one (the app quit mid-update) goes on launch.
+  private static let backupPrefix = ".Messages Agent previous "
+
+  private func removeLeftoverBackups() {
+    let folder = Backend.bundle.deletingLastPathComponent()
+    guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { return }
+    for name in names where name.hasPrefix(Self.backupPrefix) && name.hasSuffix(".app") {
+      let url = folder.appendingPathComponent(name)
+      // Only a real copy of this app (not a link, not anything else).
+      guard (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == false,
+            Bundle(url: url)?.bundleIdentifier == "com.imessage-agent-mcp.app" else { continue }
+      try? FileManager.default.removeItem(at: url)
+    }
+  }
 
   /// Once a day (if allowed in Settings), or now when asked: is there a newer release?
   func checkForUpdates(manual: Bool) async {
@@ -104,20 +119,27 @@ final class Model: ObservableObject {
       return
     }
     let current = Backend.bundle
-    let backupName = "Messages Agent (previous).app"
+    let releasePage = update?.url.flatMap(URL.init(string:))
+    let running = Backend.verifiedCdHash(current)
+    // A name nothing else has, next to the app, so nobody's own folder is ever touched.
+    let backupName = "\(Self.backupPrefix)\(UUID().uuidString.prefix(8)).app"
     let backup = current.deletingLastPathComponent().appendingPathComponent(backupName)
     do {
-      try? FileManager.default.removeItem(at: backup)
       _ = try FileManager.default.replaceItemAt(current, withItemAt: staged, backupItemName: backupName, options: .withoutDeletingBackupItem)
     } catch {
       problem = "Couldn't replace the app (\(error.localizedDescription)). Download it from GitHub instead."
-      if let url = update?.url.flatMap(URL.init(string:)) { NSWorkspace.shared.open(url) }
+      if let releasePage { NSWorkspace.shared.open(releasePage) }
       return
     }
     guard Backend.verifiedCdHash(current) == got.cdhash else {
       // Put this version back rather than leave an app that didn't check out.
-      _ = try? FileManager.default.replaceItemAt(current, withItemAt: backup)
-      problem = "The installed update didn't check out, so this version was put back."
+      let restored = (try? FileManager.default.replaceItemAt(current, withItemAt: backup)) != nil
+      if restored, running != nil, Backend.verifiedCdHash(current) == running {
+        problem = "The installed update didn't check out, so this version was put back."
+      } else {
+        problem = "The installed update didn't check out, and this version couldn't be put back. Download Messages Agent again from GitHub."
+        if let releasePage { NSWorkspace.shared.open(releasePage) }
+      }
       return
     }
     try? FileManager.default.removeItem(at: backup)

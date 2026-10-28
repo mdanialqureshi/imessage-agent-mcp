@@ -1026,6 +1026,19 @@ test('the update check reads only well-formed, newer releases from this repo', a
   assert.throws(() => checkZipListing(Buffer.from('not a zip at all, just some bytes here'), top), /isn't a zip/);
   // The name ditto uses (the local header's) must be the listed one.
   assert.throws(() => checkZipListing(zipWith([[`${top}/a.txt`, 0o100644, `${top}/../a.txt`]]), top), /differently/);
+  // What was unpacked must be exactly what the listing showed: no extra files, no links.
+  const { unpackedMatches } = await import('../src/update.ts');
+  const out = path.join(dir, 'unpacked-check');
+  fs.rmSync(out, { recursive: true, force: true });
+  fs.mkdirSync(path.join(out, top, 'Contents'), { recursive: true });
+  fs.writeFileSync(path.join(out, top, 'Contents/Info.plist'), '');
+  const listed = new Set([top, `${top}/Contents`, `${top}/Contents/Info.plist`]);
+  assert.doesNotThrow(() => unpackedMatches(out, listed));
+  fs.writeFileSync(path.join(out, top, 'hidden.txt'), '');
+  assert.throws(() => unpackedMatches(out, listed), /didn't show/);
+  fs.rmSync(path.join(out, top, 'hidden.txt'));
+  fs.symlinkSync('/etc', path.join(out, top, 'Contents/link'));
+  assert.throws(() => unpackedMatches(out, new Set([...listed, `${top}/Contents/link`])), /didn't show/);
   // Nothing tacked on after the end record.
   assert.throws(() => checkZipListing(Buffer.concat([zipWith([[`${top}/`, 0o40755]]), Buffer.from('x')]), top), /isn't a zip|layout/);
 });

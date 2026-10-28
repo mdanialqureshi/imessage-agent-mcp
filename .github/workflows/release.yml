@@ -94,16 +94,18 @@ jobs:
       # runner's own OpenSSL (nothing downloaded holds the key), then checked against the public
       # key the app ships with, so a release signed with the wrong key fails here.
       - name: Sign the checksums for the in-app updater
+        shell: bash # -eo pipefail
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
           test -n "$UPDATE_SIGNING_KEY" || { echo "::error::Add the UPDATE_SIGNING_KEY secret to the release environment (see docs/security.md)."; exit 1; }
           umask 077
           key="$RUNNER_TEMP/update-signing-key.pem"
+          trap 'rm -f "$key"' EXIT
           printf '%s\n' "$UPDATE_SIGNING_KEY" > "$key"
           openssl pkeyutl -sign -rawin -inkey "$key" -in dist/SHA256SUMS.txt -out "$RUNNER_TEMP/sig.bin"
-          rm -f "$key"
           grep -o "UPDATE_PUBLIC_KEY = '[^']*'" src/update.ts | cut -d"'" -f2 | base64 -d > "$RUNNER_TEMP/pub.der"
+          test -s "$RUNNER_TEMP/pub.der"
           openssl pkeyutl -verify -pubin -keyform DER -inkey "$RUNNER_TEMP/pub.der" -rawin -in dist/SHA256SUMS.txt -sigfile "$RUNNER_TEMP/sig.bin"
           base64 -w0 "$RUNNER_TEMP/sig.bin" > dist/SHA256SUMS.txt.sig
           echo >> dist/SHA256SUMS.txt.sig

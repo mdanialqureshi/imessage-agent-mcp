@@ -647,9 +647,9 @@ async function update(): Promise<void> {
   }
   if (git('status', '--porcelain', '--untracked-files=no')) throw new Error(`${repo} has local changes; commit or stash them first`);
   // Releases are tagged on master; a tag anywhere else isn't one.
-  git('fetch', '--quiet', 'origin', 'master');
+  git('fetch', '--quiet', 'origin', '+refs/heads/master:refs/remotes/origin/master');
   try {
-    git('merge-base', '--is-ancestor', `refs/tags/v${latest}`, 'FETCH_HEAD');
+    git('merge-base', '--is-ancestor', `refs/tags/v${latest}`, 'refs/remotes/origin/master');
   } catch {
     throw new Error(`v${latest} isn't on master, so it isn't a release; not updating to it.`);
   }

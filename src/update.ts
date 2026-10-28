@@ -113,11 +113,12 @@ const cdhash = (target: string) => /^CDHash=([0-9a-f]{40,64})$/m.exec(signature(
 /**
  * Checks a zip's own listing before anything is unpacked: every entry inside the app's folder,
  * no "..", no absolute paths, and no links (the app has none), so unpacking can't write
- * anywhere else. Each entry's local header (the name ditto actually uses) must say the same
- * as the central directory, and the entries must tile the file exactly: one disk, no Zip64,
- * nothing hidden between them.
+ * anywhere else. Each listed entry's local header (the name ditto actually uses) must say the
+ * same; one disk, no Zip64. Returns the listed paths: ditto reads the local headers front to
+ * back, so whatever it unpacked is compared with them afterwards (see unpackedMatches).
  */
-export function checkZipListing(zip: Buffer, top: string): void {
+export function checkZipListing(zip: Buffer, top: string): Set<string> {
+  const listed = new Set<string>();
   let end = -1;
   for (let i = zip.length - 22; i >= Math.max(0, zip.length - 22 - 0xffff); i--) {
     if (zip.readUInt32LE(i) === 0x06054b50) {
@@ -156,12 +157,31 @@ export function checkZipListing(zip: Buffer, top: string): void {
       throw new Error(`the update has an unexpected file: ${JSON.stringify(name.slice(0, 200))}`);
     }
     if ((mode & 0o170000) === 0o120000) throw new Error(`the update has a link in it: ${JSON.stringify(name.slice(0, 200))}`);
+    listed.add(name.replace(/\/$/, ''));
     p += 46 + nameLen + extraLen + commentLen;
   }
   if (p !== end) throw layout();
-  // Entries in order, starting at the top of the file, each after the one before.
   if (locals.length && locals[0] !== 0) throw layout();
   for (let i = 1; i < locals.length; i++) if (locals[i] <= locals[i - 1]) throw layout();
+  return listed;
+}
+
+/**
+ * After unpacking: everything there is a plain file or folder the zip's listing names, so no
+ * entry the listing didn't show (a hidden local header) slipped in.
+ */
+export function unpackedMatches(dir: string, listed: Set<string>): void {
+  const walk = (rel: string): void => {
+    for (const entry of fs.readdirSync(path.join(dir, rel))) {
+      const child = rel ? `${rel}/${entry}` : entry;
+      const st = fs.lstatSync(path.join(dir, child));
+      if (!listed.has(child) || !(st.isFile() || st.isDirectory())) {
+        throw new Error(`the update unpacked something its listing didn't show: ${JSON.stringify(child.slice(0, 200))}`);
+      }
+      if (st.isDirectory()) walk(child);
+    }
+  };
+  walk('');
 }
 
 /** Checks an unpacked app is this app, intact, at this version, with an intact reader. */
@@ -216,7 +236,7 @@ export async function downloadUpdate(
   if (!expected) throw new Error(`SHA256SUMS.txt doesn't list ${release.zip.name}`);
   if (createHash('sha256').update(zip).digest('hex') !== expected) throw new Error("the download doesn't match its checksum");
 
-  checkZipListing(zip, `${APP_NAME}.app`);
+  const listed = checkZipListing(zip, `${APP_NAME}.app`);
 
   fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(cacheDir, 0o700);
@@ -230,6 +250,7 @@ export async function downloadUpdate(
     fs.mkdirSync(unpacked, { mode: 0o700 });
     execFileSync('/usr/bin/ditto', ['-x', '-k', zipPath, unpacked]);
     fs.rmSync(zipPath);
+    unpackedMatches(unpacked, listed);
     const entries = fs.readdirSync(unpacked);
     if (entries.length !== 1 || entries[0] !== `${APP_NAME}.app`) throw new Error('the update has unexpected contents');
     const app = path.join(unpacked, entries[0]);
