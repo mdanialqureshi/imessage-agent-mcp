@@ -34,10 +34,14 @@ enum Backend {
   static let path: String = {
     var dirs: [String] = []
     let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.hasPrefix("/") ? $0 : nil } ?? "/bin/zsh"
-    let marker = "__IMESSAGE_AGENT_PATH__"
-    if let out = runSync(URL(fileURLWithPath: shell), ["-ilc", "printf '\(marker)%s\(marker)' \"$PATH\""], env: ["HOME": home, "USER": NSUserName(), "SHELL": shell, "TERM": "dumb"], timeout: 8),
-       let range = out.range(of: "\(marker)(.*)\(marker)", options: .regularExpression) {
-      dirs = out[range].replacingOccurrences(of: marker, with: "").split(separator: ":").map(String.init)
+    // The shell writes PATH to a private file rather than a pipe: something its startup files
+    // leave running in the background can hold a pipe open, but can't stop the timeout here.
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent("imessage-agent-path-\(UUID().uuidString)")
+    if FileManager.default.createFile(atPath: file.path, contents: nil, attributes: [.posixPermissions: 0o600]) {
+      let shellURL = URL(fileURLWithPath: shell)
+      _ = run(shellURL, ["-ilc", "printf %s \"$PATH\" > \"$0\"", file.path], env: ["HOME": home, "USER": NSUserName(), "SHELL": shell, "TERM": "dumb"], timeout: 8, quiet: true)
+      if let text = try? String(contentsOf: file, encoding: .utf8) { dirs = text.split(separator: ":").map(String.init) }
+      try? FileManager.default.removeItem(at: file)
     }
     dirs += ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "\(home)/.npm-global/bin", "\(home)/.bun/bin", "\(home)/.volta/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
     var seen = Set<String>()
@@ -59,21 +63,42 @@ enum Backend {
   /// Runs `cli.ts <args>` off the main thread.
   static func run(_ args: [String], timeout: TimeInterval = 180) async -> Output {
     await Task.detached {
-      run(node, [cli.path] + args, env: environment(), timeout: timeout)
+      // Anything this app starts would inherit its Full Disk Access, and Node, the CLI and
+      // your shell's startup files are all files other programs could change. So with that
+      // access (given by mistake), it starts nothing until it's switched off.
+      if appHasFullDiskAccess { return Output(status: -1, out: "", err: fullDiskAccessProblem) }
+      return run(node, [cli.path] + args, env: environment(), timeout: timeout)
     }.value
   }
+
+  static let fullDiskAccessProblem =
+    "imessage-agent itself has Full Disk Access. It must not: switch it off in System Settings → Privacy & Security → Full Disk Access (only imessage-agent-reader needs it)."
+
 
   static func environment() -> [String: String] {
     // A minimal environment: nothing from wherever the app was opened leaks into the service.
     ["HOME": home, "USER": NSUserName(), "PATH": path, "LANG": "en_US.UTF-8", "TMPDIR": NSTemporaryDirectory()]
   }
 
-  static func run(_ exe: URL, _ args: [String], env: [String: String], timeout: TimeInterval) -> Output {
+  /// `quiet` discards the program's output instead of collecting it, so nothing it leaves
+  /// running can hold the call open past its timeout.
+  static func run(_ exe: URL, _ args: [String], env: [String: String], timeout: TimeInterval, quiet: Bool = false) -> Output {
     let p = Process()
     p.executableURL = exe
     p.arguments = args
     p.environment = env
     p.currentDirectoryURL = URL(fileURLWithPath: home)
+    if quiet {
+      p.standardOutput = FileHandle.nullDevice
+      p.standardError = FileHandle.nullDevice
+      p.standardInput = FileHandle.nullDevice
+      do { try p.run() } catch { return Output(status: -1, out: "", err: error.localizedDescription) }
+      let kill = DispatchWorkItem { if p.isRunning { p.terminate() } }
+      DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: kill)
+      p.waitUntilExit()
+      kill.cancel()
+      return Output(status: p.terminationStatus, out: "", err: "")
+    }
     let out = Pipe(), err = Pipe()
     p.standardOutput = out
     p.standardError = err
@@ -93,11 +118,6 @@ enum Backend {
     return Output(status: p.terminationStatus, out: String(decoding: o, as: UTF8.self), err: String(decoding: e, as: UTF8.self))
   }
 
-  private static func runSync(_ exe: URL, _ args: [String], env: [String: String], timeout: TimeInterval) -> String? {
-    let res = run(exe, args, env: env, timeout: timeout)
-    return res.status == -1 ? nil : res.out // A shell whose startup files have errors still prints PATH.
-  }
-
   /// Whether this app itself was given Full Disk Access by mistake (only the reader needs it).
   static var appHasFullDiskAccess: Bool {
     (try? FileManager.default.contentsOfDirectory(atPath: "\(home)/Library/Messages")) != nil
@@ -108,7 +128,7 @@ enum Backend {
 struct Status: Decodable, Equatable {
   struct Install: Decodable, Equatable { let state: String; let program: String? }
   struct Service: Decodable, Equatable { let running: Bool }
-  struct Reader: Decodable, Equatable { let path: String; let valid: Bool; let access: String; let messages: Int?; let contacts: Int? }
+  struct Reader: Decodable, Equatable { let path: String; let valid: Bool; let access: String; let changedSinceGrant: Bool?; let messages: Int?; let contacts: Int? }
   struct Interpreter: Decodable, Equatable, Identifiable { let name: String; let ok: Bool; let detail: String; var id: String { name } }
   struct AppInfo: Decodable, Equatable, Identifiable { let id: String; let name: String; let installed: Bool; let connected: Bool }
   struct Items: Decodable, Equatable { let open: Int; let lastInterpretedAt: String? }

@@ -31,7 +31,8 @@ export function isFilteredText(text: string): boolean {
 export function displayText(text: string | null): string {
   if (!text) return '';
   if (isFilteredText(text)) return '[filtered: verification code]';
-  return clip(oneLine(text, ' ⏎ '), MAX_MESSAGE_CHARS);
+  // Cut first, so a huge message costs no more to clean up than a long one.
+  return clip(oneLine(text.slice(0, MAX_MESSAGE_CHARS * 2), ' ⏎ '), MAX_MESSAGE_CHARS);
 }
 
 export class Conversations {
@@ -69,7 +70,7 @@ export class Conversations {
   chatLabel(chat: Chat): string {
     if (chat.displayName) return displayText(chat.displayName);
     const names = chat.handles.map((h) => displayText(this.contacts.label(h)));
-    return names.join(', ') || chat.identifier;
+    return names.join(', ') || displayText(chat.identifier);
   }
 
   sender(m: Message): string {

@@ -27,8 +27,13 @@ The reader does one thing: copy the Messages and Contacts databases into the pri
 - It takes no arguments and gets its home folder from the system, not the environment.
 - It's signed with Apple's hardened runtime, so injected libraries (`DYLD_INSERT_LIBRARIES`) and debuggers can't run code inside it. Replacing its program changes its signature, so macOS stops honoring the access, and nothing else in its folder can load code into it. Its files can't be changed by other users.
 - `setup` and `doctor` check its signature, and rebuild or flag a reader that isn't exactly what was built.
-- It reaches the private folder without following links. It refuses the folder if any part of the way is a link or on another drive, or if the folder itself is owned by someone else or open to other users.
-- Inside that folder it never follows a link, never opens a file with SQLite, and only changes a file after checking it's its own.
+- **Re-granting.** macOS ties the access to the reader's exact code, so an update means switching it on again. The app and `doctor` remember which reader had access and warn when a different one asks for it: if you didn't just update, don't grant it, and reinstall instead. (Without a paid Developer ID, the signature can't prove who built a reader, so this check is a warning, not a guarantee.)
+- **If you give the app itself access by mistake**, it refuses to run anything (its shell, Node or the CLI would inherit the access) and asks you to switch it off.
+- **Who can change what it runs.** Before installing the background service, `setup` and the app check that Node, the server code, the reader and the Claude or Codex program, and every folder on the way to them, belong to you or the system and can't be changed by other accounts. Otherwise another account on a shared Mac could swap one and have it run as you.
+- It reaches the private folder without following links. It refuses the folder if any part of the way is a link or on another drive, or if the folder itself is owned by someone else or open to other users, including through an access-control list.
+- It reaches Messages and Contacts the same way, and only copies regular files, so a link, pipe or device planted there is skipped rather than followed or waited on.
+- Inside its private folder it never follows a link, never opens a file with SQLite, and only changes a file after checking it's its own.
+- launchd opens no log file for it (its output goes to `/dev/null`), so nothing opens files on its behalf. Its result goes to `reader-status`.
 - It holds a read lock on the live Messages database only while copying, so the copy is consistent. A two-minute deadline ends it if it stalls.
 - It's read-only: nothing is ever sent, edited or deleted.
 
@@ -37,7 +42,8 @@ Don't give `node` Full Disk Access. That would give it to every Node program lau
 ## The Mac app
 
 - **What's in it:** the menu bar app (Swift), Node (an official LTS release, pinned by checksum), this project's source and dependencies, and the prebuilt reader. The app only runs the bundled CLI, the same code as a clone, and shows its JSON status.
-- **Not notarized.** It's signed without an Apple Developer ID ("ad-hoc"), so macOS asks you to approve it once in Privacy & Security. That signature proves the app is intact, not who made it. Download only from this repo's Releases and check `SHA256SUMS.txt`, or build it yourself with `npm run build:app`. Releases are built from the tagged source by `.github/workflows/release.yml`.
+- **Not notarized.** It's signed without an Apple Developer ID ("ad-hoc"), so macOS asks you to approve it once in Privacy & Security. That signature proves the app is intact, not who made it. Download only from this repo's Releases, or build it yourself with `npm run build:app`.
+- **How releases are made.** `.github/workflows/release.yml` builds and tests the app from the tagged source in a job that can't write to the repo; a separate job, which runs no third-party code, checks the tag is on `master`, checks the files against their checksums and publishes them. For a public repo it also attaches build provenance, so `gh attestation verify <file> -R mdanialqureshi/imessage-agent-mcp` shows a download was built there.
 - **The download flag.** Once you've approved and opened it, the app removes macOS's download flag (`com.apple.quarantine`) from its own files, so launchd can start Node and the reader inside it. Its signature still covers every file.
 - **Its environment.** It passes only `PATH` (read from your login shell, so `claude` and `codex` are found) plus `HOME`, `USER`, `LANG` and `TMPDIR` to what it runs. Nothing else from your shell, such as API keys, reaches the service.
 - **Moving it.** The service and app connections point into the app. If you move it, opening it again repoints them. It won't install from a disk image or the Downloads folder, where macOS runs a temporary read-only copy.
@@ -46,6 +52,8 @@ Don't give `node` Full Disk Access. That would give it to every Node program lau
 
 Message text is written by other people, so the interpreter is a pure text-in, JSON-out call. It never loads the `imessage` connection that `setup` adds to your apps.
 
+- **No file mentions.** Both CLIs treat `@path` in a prompt as "attach this file", even with every tool off, so a message saying `@~/.ssh/id_ed25519` would have attached that file. Every `@` in a prompt is replaced with a look-alike (＠) before it reaches either CLI, and Claude Code also runs with file mentions turned off (`CLAUDE_CODE_DISABLE_FILE_MENTIONS`). A test checks exactly what the CLI receives.
+
 - **`claude -p`** (the most locked-down option): `--tools ""`, an empty `--strict-mcp-config`, no setting sources, `--no-session-persistence`. The model has no callable tools at all.
 - **`codex exec`**: every Codex feature that's on by default is turned off, read from `codex features list` at runtime: shell and exec, ChatGPT connectors (apps and plugins), code mode, browser and computer use, memories. It also runs with `--ignore-user-config`, `--ephemeral` and a read-only sandbox.
   - Codex 0.164 still *lists* a few tools that no flag removes: "collaboration" (sub-agent) tools, code mode's `exec`, `wait` and `request_user_input`. The ones that could act fail: `--ephemeral` sessions can't spawn agents, and `exec` errors because the code-mode host is off.
@@ -53,7 +61,8 @@ Message text is written by other people, so the interpreter is a pure text-in, J
 
 ## How messages are handled
 
-- **Size limits.** Each message is capped at 2,000 characters and each conversation window at 40,000.
+- **Size limits.** Each message is capped at 2,000 characters and each conversation window at 40,000, and cut before any other processing, so a huge message can't slow the service down.
+- **Malformed data.** A damaged or unusual message record decodes to nothing instead of failing the run. Dates from the model must be real dates, and text in the brief can't fake bold text or item ids.
 - **Retries.** A chat that fails 3 runs in a row is skipped instead of stalling every run. If the interpreter is unavailable (signed out, offline, usage limit), the run is retried later; outages never count toward that limit.
 - **Strangers are isolated.** A chat with anyone not in your Contacts is interpreted on its own, and if its output is unusable, only that chat is dropped. Every change must cite messages from its own chat, and closing an item needs a new message. *Residual risk:* chats with saved contacts are batched together, so one contact's message could still steer how the model reads another's chat in the same batch.
 - **No forged structure.** Embedded newlines are collapsed everywhere (messages, group names, model output), so text can't fake transcript lines or brief sections. Interpreter output is never logged.

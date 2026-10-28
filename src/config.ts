@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -68,6 +69,8 @@ export function configPath(): string {
 export function ensureStateDir(): void {
   fs.mkdirSync(paths.stateDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(paths.stateDir, 0o700);
+  // Mode bits alone don't make it private: an access-control list could still share it.
+  if (process.platform === 'darwin') spawnSync('/bin/chmod', ['-N', paths.stateDir], { stdio: 'ignore' });
 }
 
 export const INTERPRETERS: InterpreterName[] = ['claude', 'codex'];

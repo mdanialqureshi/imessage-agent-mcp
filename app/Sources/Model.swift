@@ -35,8 +35,12 @@ final class Model: ObservableObject {
     if refreshing { return }
     refreshing = true
     defer { refreshing = false }
-    let res = await Backend.run(["status", "--json"] + (full ? ["--interpreters", "--apps"] : []), timeout: 90)
     appHasFullDiskAccess = Backend.appHasFullDiskAccess
+    if appHasFullDiskAccess {
+      problem = Backend.fullDiskAccessProblem
+      return
+    }
+    let res = await Backend.run(["status", "--json"] + (full ? ["--interpreters", "--apps"] : []), timeout: 90)
     guard res.ok, let data = res.out.data(using: .utf8), let next = try? JSONDecoder().decode(Status.self, from: data) else {
       problem = "Couldn't check the status: \(res.reason)"
       return
@@ -123,6 +127,7 @@ final class Model: ObservableObject {
 
   /// One line for the menu.
   var summary: String {
+    if appHasFullDiskAccess { return "Switch off Full Disk Access for imessage-agent" }
     guard let s = status else { return "Checking…" }
     if !s.serviceReady { return "Not set up yet" }
     switch s.reader.access {
@@ -137,4 +142,13 @@ final class Model: ObservableObject {
   }
 
   var needsAttention: Bool { !(status?.ready ?? true) || appHasFullDiskAccess }
+
+  /// Checks again whether the app itself still has Full Disk Access (it shouldn't).
+  func recheckAppAccess() async {
+    appHasFullDiskAccess = Backend.appHasFullDiskAccess
+    if !appHasFullDiskAccess {
+      if problem == Backend.fullDiskAccessProblem { problem = nil }
+      await refresh(full: true)
+    }
+  }
 }

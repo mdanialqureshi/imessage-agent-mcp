@@ -7,7 +7,10 @@ import SwiftUI
 enum Main {
   static func main() {
     Backend.clearQuarantine()
-    if CommandLine.arguments.contains("--self-test") { return SelfTest.run() }
+    if CommandLine.arguments.contains("--self-test") {
+      if Backend.appHasFullDiskAccess { print("self-test failed: \(Backend.fullDiskAccessProblem)"); exit(1) }
+      return SelfTest.run()
+    }
     if let i = CommandLine.arguments.firstIndex(of: "--render-previews"), i + 1 < CommandLine.arguments.count {
       return Previews.render(to: URL(fileURLWithPath: CommandLine.arguments[i + 1]))
     }

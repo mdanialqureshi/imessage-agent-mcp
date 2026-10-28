@@ -216,7 +216,7 @@ async function codex(prompt: string, config: Config): Promise<RawOp[]> {
 /** Claude Code signed in with a Claude plan: `claude -p` with structured output and no tools. */
 async function claude(prompt: string, config: Config): Promise<RawOp[]> {
   return withScratch(async (dir) => {
-    const { stdout } = await run(bin('claude'), claudeArgs(config.model), prompt, dir);
+    const { stdout } = await run(bin('claude'), claudeArgs(config.model), prompt, dir, claudeEnv());
     let out: { structured_output?: { ops?: unknown }; result?: unknown };
     try {
       out = JSON.parse(stdout);
@@ -230,5 +230,15 @@ async function claude(prompt: string, config: Config): Promise<RawOp[]> {
 
 export function interpreter(config: Config): (prompt: string) => Promise<RawOp[]> {
   const impl = config.interpreter === 'claude' ? claude : codex;
-  return (prompt) => impl(prompt, config);
+  return (prompt) => impl(inertMentions(prompt), config);
 }
+
+/**
+ * Interpreter CLIs treat `@path` in a prompt as "attach this file", even with every tool off.
+ * Message text is written by other people, so every @ becomes a look-alike (＠) that no CLI
+ * acts on but the model still reads as an @.
+ */
+export const inertMentions = (prompt: string) => prompt.replace(/@/g, '\uFF20');
+
+/** Claude Code's environment: file mentions off too, in case one ever slips through. */
+export const claudeEnv = (): NodeJS.ProcessEnv => ({ ...process.env, CLAUDE_CODE_DISABLE_FILE_MENTIONS: '1' });

@@ -7,6 +7,12 @@ import { Conversations, displayText, formatTime, type Window } from '../messages
 import { type Evidence, type ItemFields, KINDS, type Kind, Store } from '../store.ts';
 import { clip, oneLine } from '../text.ts';
 import { buildPrompt, type PromptChat } from './prompt.ts';
+
+/** A date or date-time the brief can sort and compare; anything else is dropped. */
+function isoDate(v: unknown): string | null {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})?)?$/.test(v)) return null;
+  return Number.isNaN(Date.parse(v)) ? null : v;
+}
 import { InterpreterUnavailable, interpreter, type RawOp, ToolUseAttempt } from './runners.ts';
 
 /** Rough per-call transcript budget; large backlogs are split across several interpreter calls. */
@@ -24,7 +30,7 @@ const str = (v: unknown, max: number): string | null => (typeof v === 'string' &
  * Validates one model op against the output schema. The schema is enforced for codex and
  * claude's structured output, but not for claude's plain-text fallback.
  */
-function validOp(raw: unknown): RawOp | null {
+export function validOp(raw: unknown): RawOp | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
   const title = str(o.title, 200);
@@ -37,8 +43,8 @@ function validOp(raw: unknown): RawOp | null {
     title,
     detail: str(o.detail, 1000),
     person: str(o.person, 200),
-    when_start: str(o.when_start, 40),
-    when_end: str(o.when_end, 40),
+    when_start: isoDate(o.when_start),
+    when_end: isoDate(o.when_end),
     when_text: str(o.when_text, 200),
     precision: PRECISIONS.has(o.precision as string) ? (o.precision as string) : 'none',
     strength: STRENGTHS.has(o.strength as string) ? (o.strength as string) : 'soft',

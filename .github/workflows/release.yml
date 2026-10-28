@@ -2,6 +2,10 @@ name: Release
 
 # Pushing a tag like v0.2.0 builds the Mac app, tests the build, and publishes it as a GitHub
 # release. Running it by hand only builds and tests.
+#
+# Two jobs, so nothing that runs third-party code (npm, the build, the tests) ever holds a
+# token that can write to the repo: `build` is read-only and hands its files to `publish`,
+# which only checks and uploads them.
 on:
   push:
     tags: ['v*']
@@ -11,10 +15,8 @@ permissions:
   contents: read
 
 jobs:
-  app:
+  build:
     runs-on: macos-latest
-    permissions:
-      contents: write # to publish the release
     steps:
       # Actions are pinned to commit SHAs so a moved tag can't change what runs.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -28,15 +30,52 @@ jobs:
       - name: Public-repo safety (all files, commit authors and messages)
         run: npm run safety:all
       - run: npm test
-      - name: The tag matches package.json
-        if: startsWith(github.ref, 'refs/tags/')
-        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
       - name: Build the app (Apple silicon and Intel)
         run: node scripts/build-app.mjs
       - name: Test the build
         run: IMESSAGE_AGENT_APP=dist/imessage-agent.app node --test test/app.test.ts
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to publish the release
+      id-token: write # for the build provenance attestation
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: The tag is on master and matches package.json
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/master
+          test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: dist
+      - name: The files match their checksums
+        run: cd dist && sha256sum --check SHA256SUMS.txt
+      # Lets anyone check a download was built here from this tag: gh attestation verify <file> -R <repo>.
+      # (GitHub only offers attestations for public repositories on most plans.)
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        if: github.event.repository.visibility == 'public'
+        with:
+          subject-path: |
+            dist/*.dmg
+            dist/*.zip
       - name: Publish the release
-        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

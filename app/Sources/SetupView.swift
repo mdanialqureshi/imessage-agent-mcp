@@ -12,6 +12,8 @@ struct SetupView: View {
         VStack(alignment: .leading, spacing: 22) {
           if Backend.mustMove || model.previewMustMove {
             MoveFirst()
+          } else if model.appHasFullDiskAccess {
+            AppHasAccess()
           } else {
             InterpreterStep()
             ServiceStep()
@@ -82,6 +84,31 @@ struct Step<Content: View>: View {
         content
       }
       Spacer(minLength: 0)
+    }
+  }
+}
+
+/// Shown instead of the steps while the app itself has Full Disk Access: it starts nothing then.
+struct AppHasAccess: View {
+  @EnvironmentObject var model: Model
+
+  var body: some View {
+    Step(number: 1, title: "Switch off Full Disk Access for imessage-agent", done: false) {
+      Text("imessage-agent itself was given Full Disk Access. It doesn't need it, and while it has it, it won't run anything. In System Settings, switch off **imessage-agent** (or remove it). Only **imessage-agent-reader** needs access.")
+        .fixedSize(horizontal: false, vertical: true)
+      HStack {
+        Button("Open Full Disk Access") {
+          NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
+        }
+        .buttonStyle(.borderedProminent)
+        Button("Check Again") { Task { await model.recheckAppAccess() } }
+      }
+    }
+    .task {
+      while !Task.isCancelled && model.appHasFullDiskAccess {
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        await model.recheckAppAccess()
+      }
     }
   }
 }
@@ -223,6 +250,12 @@ struct AccessStep: View {
       } else if !(s?.serviceReady ?? false) {
         Text("Finish step 2 first.").font(.callout).foregroundStyle(.secondary)
       } else {
+        if s?.reader.changedSinceGrant ?? false {
+          Label("The reader changed since you gave it access, so macOS switched access off. If you just updated imessage-agent, give the new reader access. If you didn't, don't: download the app again instead.", systemImage: "exclamationmark.triangle.fill")
+            .foregroundStyle(.orange)
+            .font(.callout)
+            .fixedSize(horizontal: false, vertical: true)
+        }
         HStack(alignment: .top, spacing: 18) {
           ReaderTile()
           VStack(alignment: .leading, spacing: 6) {

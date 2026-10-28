@@ -57,10 +57,13 @@ export function decodeAttributedBody(blob: Uint8Array | null | undefined): strin
   if (i >= buf.length) return null;
   let length = buf[i];
   i += 1;
+  // A truncated or malformed blob decodes to nothing rather than failing the whole query.
   if (length === 0x81) {
+    if (i + 2 > buf.length) return null;
     length = buf.readUInt16LE(i);
     i += 2;
   } else if (length === 0x82) {
+    if (i + 4 > buf.length) return null;
     length = buf.readUInt32LE(i);
     i += 4;
   }

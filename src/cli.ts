@@ -10,7 +10,7 @@ import { interpretNow } from './interpret/run.ts';
 import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
 import { Conversations } from './messages/conversations.ts';
-import { CLI_READER_APP, installReader, READER_LABEL, readerApp, readerBinary, readerCdHash, readerStatus, STALE_MS } from './messages/mirror.ts';
+import { assertOnlyYoursToChange, CLI_READER_APP, installReader, READER_LABEL, readerApp, readerBinary, readerCdHash, readerStatus, STALE_MS } from './messages/mirror.ts';
 import { APPS, which } from './apps.ts';
 import { bridge, callTool, type ServiceHealth, serviceHealth } from './bridge.ts';
 import { serveSocket, socketPath } from './server.ts';
@@ -81,13 +81,14 @@ async function doctor(): Promise<void> {
       if (!readerCdHash()) throw new Error(`the reader was changed or damaged (${appBundle ? 'download the app again' : 'run: node src/cli.ts setup to rebuild it'})`);
       if (!health.canReadMessages) {
         const status = readerStatus();
-        const log = path.join(paths.stateDir, 'logs/reader.log');
+        if (readerChangedSinceGrant()) throw new Error(CHANGED_READER);
         throw new Error(status?.ok && Date.now() - status.at >= STALE_MS
-          ? `the reader isn't answering, so the service's copy of Messages is out of date; see ${log}`
+          ? "the reader isn't answering, so the service's copy of Messages is out of date"
           : status?.error === 'EFAIL'
-            ? `the reader couldn't copy Messages; see ${log}`
+            ? "the reader couldn't copy Messages (it keeps trying)"
             : "the reader doesn't have it yet, so the service can't read Messages");
       }
+      rememberGrantedReader();
       return `only the reader has it, and the service can read its copy (${health.messages.toLocaleString()} messages, ${health.contacts} contact handles)`;
     });
     if (!ok) console.log(fdaHelp().replace(/^/gm, '   '));
@@ -314,7 +315,7 @@ function setConfig(key: string | undefined, raw: string | undefined): void {
   const expected = key && key !== 'interpreter' && Object.hasOwn(defaults, key) ? defaults[key] : undefined;
   const valid =
     key === 'model'
-      ? value === null || (typeof value === 'string' && /^[\w.:-]{1,100}$/.test(value))
+      ? value === null || (typeof value === 'string' && /^\w[\w.:-]{0,99}$/.test(value)) // Never starting with "-": it's passed as an argument.
       : typeof expected === 'number'
         ? Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 100_000
         : typeof expected === 'boolean'
@@ -358,6 +359,7 @@ async function statusJson(): Promise<void> {
         : status?.error === 'EFAIL'
           ? 'failed'
           : 'needed';
+  if (access === 'ok') rememberGrantedReader();
   const store = Store.open();
   const items = { open: store.listItems({ status: ['open'] }).length, lastInterpretedAt: store.getMeta('last_interpreted_at') ?? null };
   store.close();
@@ -370,6 +372,7 @@ async function statusJson(): Promise<void> {
       path: readerApp(),
       valid: Boolean(readerCdHash()),
       access,
+      changedSinceGrant: access !== 'ok' && readerChangedSinceGrant(),
       ...(health?.canReadMessages ? { messages: health.messages, contacts: health.contacts } : {}),
     },
     interpreter: config.interpreter,
@@ -462,14 +465,19 @@ ${args}
  * (`launchctl kickstart`), with no arguments or environment of ours.
  */
 function readerPlist(): string {
-  return launchdPlist(READER_LABEL, 'reader.log', `  <key>Program</key><string>${xml(readerBinary())}</string>
+  return launchdPlist(READER_LABEL, null, `  <key>Program</key><string>${xml(readerBinary())}</string>
   <key>ProcessType</key><string>Background</string>`);
 }
 
-function launchdPlist(label: string, logName: string, body: string): string {
+/**
+ * The reader gets no log file (logName null): launchd opens log files on a job's behalf, and
+ * nothing should open files for the one program with Full Disk Access. Its result goes to
+ * reader-status instead.
+ */
+function launchdPlist(label: string, logName: string | null, body: string): string {
   const logDir = path.join(paths.stateDir, 'logs');
   fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
-  const log = xml(path.join(logDir, logName));
+  const log = logName ? xml(path.join(logDir, logName)) : '/dev/null';
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -495,14 +503,34 @@ const bootout = (file: string) => {
 
 function installService(): void {
   if (!fs.existsSync(readerBinary())) throw new Error('the reader is missing; run: node src/cli.ts setup');
+  const service = plist();
+  // launchd runs these as you at every login, so nobody else may be able to change them.
+  const env = /<key>IMESSAGE_AGENT_(?:CLAUDE|CODEX)_BIN<\/key><string>([^<]+)<\/string>/g;
+  const interpreters = [...service.matchAll(env)].map((m) => m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'));
+  for (const file of [process.execPath, cliPath, readerBinary(), ...interpreters]) assertOnlyYoursToChange(file);
   fs.mkdirSync(path.dirname(plistPath), { recursive: true });
-  for (const [file, content] of [[readerPlistPath, readerPlist()], [plistPath, plist()]]) {
+  for (const [file, content] of [[readerPlistPath, readerPlist()], [plistPath, service]]) {
     bootout(file);
     fs.writeFileSync(file, content);
     execFileSync('/bin/launchctl', ['bootstrap', `gui/${process.getuid!()}`, file]);
   }
   console.log(`   Installed ${READER_LABEL} and ${LABEL} (logs: ${path.join(paths.stateDir, 'logs')})`);
 }
+
+/** Remembers which reader had access, to tell a changed reader from one you just updated. */
+const grantedPath = () => path.join(paths.stateDir, 'reader-granted');
+function rememberGrantedReader(): void {
+  const hash = readerCdHash();
+  if (hash && readGranted() !== hash) fs.writeFileSync(grantedPath(), hash + '\n', { mode: 0o600 });
+}
+const readGranted = () => (fs.existsSync(grantedPath()) ? fs.readFileSync(grantedPath(), 'utf8').trim() : null);
+/** The reader lost access and isn't the one that had it: an update, or something swapped it. */
+const readerChangedSinceGrant = () => {
+  const granted = readGranted();
+  return Boolean(granted && readerCdHash() !== granted);
+};
+const CHANGED_READER =
+  "the reader changed since you gave it access, so macOS switched access off. If you just updated or rebuilt it, give the new one access. If you didn't, don't: something may have replaced it. Reinstall instead.";
 
 /** Also deletes the reader and its copy of Messages, which setup recreates. */
 function uninstallService(): void {
@@ -511,7 +539,7 @@ function uninstallService(): void {
     fs.rmSync(file, { force: true });
   }
   fs.rmSync(socketPath(), { force: true });
-  for (const name of ['mirror', 'reader-status', 'reader.sha256', 'reader-build.app', 'bin']) fs.rmSync(path.join(paths.stateDir, name), { recursive: true, force: true });
+  for (const name of ['mirror', 'reader-status', 'reader-granted', 'reader.sha256', 'reader-build.app', 'bin']) fs.rmSync(path.join(paths.stateDir, name), { recursive: true, force: true });
   fs.rmSync(CLI_READER_APP, { recursive: true, force: true }); // The app's own reader goes when the app is deleted.
   console.log(`Removed the background service (${LABEL}), its reader and its copy of Messages.`);
 }

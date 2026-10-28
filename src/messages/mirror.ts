@@ -90,11 +90,14 @@ export const CLI_READER_APP = path.join(os.homedir(), 'Applications', 'imessage-
  * or the installed one isn't exactly what was built: a new build has a new signature, so macOS
  * asks for Full Disk Access again. Returns true if it built one.
  */
-export function installReader(source: string, { app = readerApp(), stateDir = paths.stateDir, inApp = Boolean(appBundle) } = {}): boolean {
+export function installReader(
+  source: string,
+  { app = readerApp(), stateDir = paths.stateDir, inApp = Boolean(appBundle), cliReader = CLI_READER_APP } = {},
+): boolean {
   fs.rmSync(path.join(stateDir, 'bin'), { recursive: true, force: true }); // Where older versions kept it.
   if (inApp) {
     if (!readerCdHash(app)) throw new Error('the reader inside imessage-agent.app is missing or damaged; download the app again');
-    fs.rmSync(CLI_READER_APP, { recursive: true, force: true });
+    fs.rmSync(cliReader, { recursive: true, force: true });
     return false;
   }
   const stamp = path.join(stateDir, 'reader.sha256'); // Outside the app: changing the app breaks its signature.
@@ -130,6 +133,25 @@ function privateApplicationsDir(dir: string): void {
   const st = fs.lstatSync(dir);
   if (!st.isDirectory() || st.uid !== process.getuid!() || st.mode & 0o022) {
     throw new Error(`${dir} must be a folder you own that other users can't write to (try: chmod go-w "${dir}")`);
+  }
+}
+
+/**
+ * Refuses a program (or anything on the way to it) that another account could change:
+ * everything must belong to you or the system, with no write access for other users.
+ */
+export function assertOnlyYoursToChange(file: string): void {
+  const me = process.getuid!();
+  let p = fs.realpathSync(file);
+  for (;;) {
+    const st = fs.lstatSync(p);
+    // Group write is fine for wheel and admin (like /Applications or Homebrew's folders): their members can change anything anyway.
+    const systemGroupWrite = st.gid === 0 || st.gid === 80;
+    if ((st.uid !== me && st.uid !== 0) || st.mode & 0o002 || (st.mode & 0o020 && !systemGroupWrite)) {
+      throw new Error(`${p} could be changed by another account on this Mac, and the background service would run it as you. Install it somewhere only you (or the system) can change.`);
+    }
+    if (p === '/') return;
+    p = path.dirname(p);
   }
 }
 

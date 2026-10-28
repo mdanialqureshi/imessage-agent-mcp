@@ -23,16 +23,19 @@ function whenLabel(i: Item): string {
   return `${day}${time}${i.whenText ? ` ("${oneLine(i.whenText)}")` : ''}`;
 }
 
+/** Untrusted text on one line, without the backticks and asterisks that could fake an item id or emphasis. */
+const plain = (text: string) => oneLine(text).replace(/[`*]/g, '');
+
 export function formatItem(i: Item, opts: { since?: string; evidence?: number } = {}): string {
   const isNew = opts.since && i.createdAt > opts.since ? '🆕 ' : '';
   // Item text is model output derived from untrusted messages; none of it may add lines.
   const meta = [i.kind, whenLabel(i), i.strength !== 'firm' ? oneLine(i.strength) : '', `${Math.round(i.confidence * 100)}%`]
     .filter(Boolean)
     .join(' · ');
-  const lines = [`- ${isNew}**${oneLine(i.title)}** — ${oneLine(i.chatLabel)} · ${meta} · \`${i.id}\``];
-  if (i.detail) lines.push(`  ${oneLine(i.detail)}`);
-  if (i.missingDetails.length) lines.push(`  Missing: ${oneLine(i.missingDetails.join(', '))}`);
-  for (const e of i.evidence.slice(-(opts.evidence ?? 2))) lines.push(`  > ${oneLine(e.from)} (${e.date}): ${oneLine(e.text)}`);
+  const lines = [`- ${isNew}**${plain(i.title)}** — ${plain(i.chatLabel)} · ${meta} · \`${i.id}\``];
+  if (i.detail) lines.push(`  ${plain(i.detail)}`);
+  if (i.missingDetails.length) lines.push(`  Missing: ${plain(i.missingDetails.join(', '))}`);
+  for (const e of i.evidence.slice(-(opts.evidence ?? 2))) lines.push(`  > ${plain(e.from)} (${e.date}): ${plain(e.text)}`);
   if (i.suggestedAction !== 'none') lines.push(`  Suggested: ${oneLine(i.suggestedAction).replace('_', ' ')}`);
   return lines.join('\n');
 }
