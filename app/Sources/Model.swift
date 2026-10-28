@@ -12,6 +12,9 @@ final class Model: ObservableObject {
   @Published private(set) var apps: [Status.AppInfo] = []
   /// What's running right now, e.g. "Installing the background service…".
   @Published private(set) var busy: String?
+  /// The CLI command behind `busy` (e.g. "install-service", "connect-app chatgpt"), so the
+  /// step that started it can show its own spinner.
+  @Published private(set) var busyCommand: String?
   /// Why the last action failed.
   @Published var problem: String?
   @Published private(set) var brief = ""
@@ -85,16 +88,31 @@ final class Model: ObservableObject {
     problem = nil
     defer { busy = nil }
     let res = await Backend.run(["update", "--download"], timeout: 900)
-    struct Downloaded: Decodable { let version: String; let app: String }
+    struct Downloaded: Decodable { let version: String; let app: String; let cdhash: String; let readerCdhash: String }
     guard res.ok, let data = res.out.data(using: .utf8), let got = try? JSONDecoder().decode(Downloaded.self, from: data) else {
       problem = "Couldn't download the update: \(res.reason)"
       return
     }
+    // Checked again here, on the exact bundle about to be installed: the CLI's check ran a
+    // moment ago, in a folder other programs running as you could reach.
+    let staged = URL(fileURLWithPath: got.app).standardizedFileURL
+    let caches = URL(fileURLWithPath: Backend.home).appendingPathComponent("Library/Caches/imessage-agent-mcp").standardizedFileURL.path + "/update-"
+    guard got.version == latest, staged.path.hasPrefix(caches), staged.lastPathComponent == "Messages Agent.app",
+          Backend.verifiedCdHash(staged) == got.cdhash
+    else {
+      problem = "The downloaded update didn't check out, so it wasn't installed."
+      return
+    }
     let current = Backend.bundle
     do {
-      _ = try FileManager.default.replaceItemAt(current, withItemAt: URL(fileURLWithPath: got.app))
+      _ = try FileManager.default.replaceItemAt(current, withItemAt: staged)
     } catch {
       problem = "Couldn't replace the app (\(error.localizedDescription)). Download it from GitHub instead."
+      if let url = update?.url.flatMap(URL.init(string:)) { NSWorkspace.shared.open(url) }
+      return
+    }
+    guard Backend.verifiedCdHash(current) == got.cdhash else {
+      problem = "The installed update didn't check out. Download Messages Agent again from GitHub."
       if let url = update?.url.flatMap(URL.init(string:)) { NSWorkspace.shared.open(url) }
       return
     }
@@ -150,12 +168,14 @@ final class Model: ObservableObject {
   @discardableResult
   func act(_ label: String, _ args: [String], full: Bool = false) async -> Bool {
     busy = label
+    busyCommand = args.joined(separator: " ")
     problem = nil
     let res = await Backend.run(args)
     if !res.ok { problem = res.reason }
     // The quick status first, so the change shows right away; then the slower checks.
     await refresh()
     busy = nil
+    busyCommand = nil
     if full { await refresh(full: true) }
     return res.ok
   }

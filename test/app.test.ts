@@ -2,7 +2,7 @@
 // Skipped unless IMESSAGE_AGENT_APP points at the app.
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync, type KeyObject, sign as cryptoSign } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -173,34 +173,47 @@ test('an update is downloaded only from GitHub and installed only if it checks o
   };
   const name = `Messages-Agent-${version}.zip`;
   const base = `https://github.com/mdanialqureshi/imessage-agent-mcp/releases/download/v${version}/`;
-  const release = (zip: Buffer) => ({ version, url: '', zip: { name, url: base + name, size: zip.length }, sums: { url: base + 'SHA256SUMS.txt' } });
+  const release = (zip: Buffer) => ({ version, url: '', zip: { name, url: base + name, size: zip.length }, sums: { url: base + 'SHA256SUMS.txt' }, sig: { url: base + 'SHA256SUMS.txt.sig' } });
+  // A stand-in for the release key; the real one's private half is only in the release workflow.
+  const keys = generateKeyPairSync('ed25519');
+  const publicKey = keys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
+  const signWith = (key: KeyObject, sums: string) => cryptoSign(null, Buffer.from(sums), key).toString('base64');
   // A stand-in for GitHub: release files redirect to its asset host, like the real one.
-  const fakeGitHub = (zip: Buffer, sums: string, assetHost = 'objects.githubusercontent.com') => async (url: string) => {
+  const fakeGitHub = (zip: Buffer, sums: string, assetHost = 'objects.githubusercontent.com', signer = keys.privateKey) => async (url: string) => {
     const u = new URL(url);
     if (u.hostname === 'github.com') return new Response(null, { status: 302, headers: { location: `https://${assetHost}/x/${path.basename(u.pathname)}` } });
-    return new Response(path.basename(u.pathname) === name ? zip : sums);
+    const file = path.basename(u.pathname);
+    return new Response(file === name ? zip : file === 'SHA256SUMS.txt.sig' ? signWith(signer, sums) : sums);
   };
   const sumsFor = (zip: Buffer) => `${createHash('sha256').update(zip).digest('hex')}  ${name}\n`;
   const good = zipOf(app!);
   const cacheDir = path.join(scratch, 'cache');
 
-  const staged = await downloadUpdate(release(good), fakeGitHub(good, sumsFor(good)) as typeof fetch, cacheDir);
-  assert.equal(path.basename(staged), 'Messages Agent.app');
-  assert.equal(spawnSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', staged]).status, 0);
+  const got = await downloadUpdate(release(good), fakeGitHub(good, sumsFor(good)) as typeof fetch, cacheDir, publicKey);
+  assert.equal(path.basename(got.app), 'Messages Agent.app');
+  assert.equal(spawnSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', got.app]).status, 0);
+  const details = (target: string) => spawnSync('/usr/bin/codesign', ['-dvvv', target], { encoding: 'utf8' }).stderr;
+  assert.match(details(got.app), new RegExp(`^CDHash=${got.cdhash}$`, 'm'));
+  assert.match(details(reader), new RegExp(`^CDHash=${got.readerCdhash}$`, 'm'), 'the same reader, so Full Disk Access stays on');
   assert.equal(fs.statSync(cacheDir).mode & 0o777, 0o700, 'staged privately');
+  assert.equal(fs.statSync(path.dirname(path.dirname(got.app))).mode & 0o777, 0o700);
 
+  // Checksums signed with any other key (say, a release's files and sums replaced on GitHub).
+  const intruder = generateKeyPairSync('ed25519').privateKey;
+  await assert.rejects(downloadUpdate(release(good), fakeGitHub(good, sumsFor(good), undefined, intruder) as typeof fetch, cacheDir, publicKey), /release key/);
   // A download that doesn't match the release's checksums.
-  await assert.rejects(downloadUpdate(release(good), fakeGitHub(Buffer.concat([good, Buffer.from('x')]), sumsFor(good)) as typeof fetch, cacheDir), /checksum|larger/);
+  await assert.rejects(downloadUpdate(release(good), fakeGitHub(Buffer.concat([good, Buffer.from('x')]), sumsFor(good)) as typeof fetch, cacheDir, publicKey), /checksum|larger/);
   // Redirected anywhere but GitHub's own hosts.
-  await assert.rejects(downloadUpdate(release(good), fakeGitHub(good, sumsFor(good), 'evil.example.com') as typeof fetch, cacheDir), /refusing/);
-  // An altered app with a checksum that matches it (e.g. a replaced release file and its sums).
+  await assert.rejects(downloadUpdate(release(good), fakeGitHub(good, sumsFor(good), 'evil.example.com') as typeof fetch, cacheDir, publicKey), /refusing/);
+  // A correctly signed release whose app was altered after it was built (not re-signed).
   const altered = path.join(scratch, 'altered', 'Messages Agent.app');
   fs.mkdirSync(path.dirname(altered));
   execFileSync('/usr/bin/ditto', [app!, altered]);
   fs.appendFileSync(path.join(altered, 'Contents/Resources/app/src/cli.ts'), '\n// changed\n');
   const bad = zipOf(altered);
-  await assert.rejects(downloadUpdate(release(bad), fakeGitHub(bad, sumsFor(bad)) as typeof fetch, cacheDir), /signature/);
+  await assert.rejects(downloadUpdate(release(bad), fakeGitHub(bad, sumsFor(bad)) as typeof fetch, cacheDir, publicKey), /signature/);
   // A release whose app is a different version than it claims.
-  await assert.rejects(downloadUpdate({ ...release(good), version: '99.0.0' }, fakeGitHub(good, sumsFor(good)) as typeof fetch, cacheDir), /version/);
+  await assert.rejects(downloadUpdate({ ...release(good), version: '99.0.0' }, fakeGitHub(good, sumsFor(good)) as typeof fetch, cacheDir, publicKey), /version/);
+  assert.deepEqual(fs.readdirSync(cacheDir), [], 'nothing rejected is left behind');
   fs.rmSync(scratch, { recursive: true, force: true });
 });

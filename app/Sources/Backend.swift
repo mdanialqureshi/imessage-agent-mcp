@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// Runs the CLI bundled inside the app (Contents/Resources/app/src/cli.ts) with the app's own
 /// Node. The app itself holds no special permissions: only Messages Agent Reader, a separate
@@ -148,6 +149,22 @@ enum Backend {
       if group.wait(timeout: .now() + 2) == .timedOut { return Output(status: -1, out: "", err: "it left something running that wouldn't stop") }
     }
     return Output(status: p.terminationStatus, out: String(decoding: o, as: UTF8.self), err: String(decoding: e, as: UTF8.self))
+  }
+
+  /// The code hash of an intact copy of this app (every file sealed, every architecture and
+  /// nested program checked, this app's identifier), or nil.
+  static func verifiedCdHash(_ url: URL) -> String? {
+    var code: SecStaticCode?
+    guard SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess, let code else { return nil }
+    var requirement: SecRequirement?
+    guard SecRequirementCreateWithString(#"identifier "com.imessage-agent-mcp.app""# as CFString, [], &requirement) == errSecSuccess else { return nil }
+    let flags = SecCSFlags(rawValue: UInt32(kSecCSStrictValidate) | UInt32(kSecCSCheckAllArchitectures) | UInt32(kSecCSCheckNestedCode))
+    guard SecStaticCodeCheckValidity(code, flags, requirement) == errSecSuccess else { return nil }
+    var info: CFDictionary?
+    guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+          let hash = (info as? [String: Any])?[kSecCodeInfoUnique as String] as? Data
+    else { return nil }
+    return hash.map { String(format: "%02x", $0) }.joined()
   }
 
   /// Asks politely, then kills: an interactive shell ignores SIGTERM. The whole process group,

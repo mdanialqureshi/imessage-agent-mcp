@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildBrief, formatItem } from './brief.ts';
-import { downloadUpdate, latestRelease } from './update.ts';
+import { downloadUpdate, latestRelease, newer, REPO } from './update.ts';
 import { appBundle, type Config, configPath, ensureStateDir, INTERPRETERS, type InterpreterName, loadConfig, loadConfigDefaults, MODEL_NAME, paths, saveConfig } from './config.ts';
 import { interpretNow } from './interpret/run.ts';
 import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
@@ -609,32 +609,48 @@ function uninstallService(): void {
 
 /**
  * The Mac app: `update --check` reports a newer release, `update --download` fetches and
- * checks it and prints where it is (the app swaps it in). A clone: `update` pulls the latest
- * code and restarts the service; `update --check` only says whether there's anything new.
+ * checks it and prints where it is (the app checks it again and swaps it in). A clone: `update`
+ * moves to the newest release tag (never just the branch tip) and restarts the service;
+ * `update --check` only says whether there's one.
  */
 async function update(): Promise<void> {
   if (appBundle) {
     const release = await latestRelease(version());
     if (flag('download')) {
       if (!release) throw new Error('There is no newer version.');
-      console.log(JSON.stringify({ version: release.version, app: await downloadUpdate(release) }));
+      console.log(JSON.stringify({ version: release.version, ...(await downloadUpdate(release)) }));
     } else {
       console.log(JSON.stringify({ current: version(), latest: release?.version ?? null, url: release?.url ?? null }));
     }
     return;
   }
   const repo = path.join(path.dirname(cliPath), '..');
-  const git = (...args: string[]) => execFileSync('/usr/bin/git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
+  // No hooks: nothing fetched may run during the update itself.
+  const git = (...args: string[]) => execFileSync('/usr/bin/git', ['-c', 'core.hooksPath=/dev/null', '-C', repo, ...args], { encoding: 'utf8' }).trim();
+  const origin = git('remote', 'get-url', 'origin');
+  if (!new RegExp(`^(https://github\\.com/|git@github\\.com:)${REPO.replace('.', '\\.')}(\\.git)?$`).test(origin)) {
+    throw new Error(`This clone's origin is ${origin}, not github.com/${REPO}; update it yourself.`);
+  }
+  git('fetch', '--quiet', '--tags', 'origin');
+  const latest = git('tag', '--list', 'v*')
+    .split('\n')
+    .map((t) => /^v(\d{1,4}\.\d{1,4}\.\d{1,4})$/.exec(t.trim())?.[1])
+    .filter((v): v is string => Boolean(v))
+    .reduce<string | null>((best, v) => (!best || newer(v, best) ? v : best), null);
+  if (!latest || !newer(latest, version())) {
+    console.log(`Up to date (${version()}).`);
+    return;
+  }
   if (flag('check')) {
-    git('fetch', '--quiet');
-    const behind = Number(git('rev-list', '--count', 'HEAD..@{u}'));
-    console.log(behind ? `${behind} new commit(s) on ${git('rev-parse', '--abbrev-ref', '@{u}')}: run node src/cli.ts update` : 'Up to date.');
+    console.log(`Version ${latest} is available: run node src/cli.ts update`);
     return;
   }
   if (git('status', '--porcelain', '--untracked-files=no')) throw new Error(`${repo} has local changes; commit or stash them first`);
-  const before = git('rev-parse', 'HEAD');
-  console.log(execFileSync('/usr/bin/git', ['-C', repo, 'pull', '--ff-only'], { encoding: 'utf8' }).trim());
-  if (git('rev-parse', 'HEAD') === before) return;
+  try {
+    console.log(git('merge', '--ff-only', `refs/tags/v${latest}`));
+  } catch {
+    throw new Error(`Couldn't move this clone to v${latest} without merging (it has commits of its own); update it yourself.`);
+  }
   execFileSync('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: repo, stdio: 'inherit' });
   // The new code runs in a fresh process: install-service from the updated files.
   execFileSync(process.execPath, [cliPath, 'install-service'], { stdio: 'inherit' });

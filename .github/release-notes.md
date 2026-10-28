@@ -8,6 +8,6 @@ The first time you open it, macOS says it can't verify the app, because it isn't
 
 The app then walks you through setup. It needs [Claude Code](https://claude.com/claude-code) or [Codex](https://github.com/openai/codex) signed in with your subscription.
 
-**Updating:** replace the app in Applications with the new one and open it. The new version's reader is a new program to macOS, so the setup window asks you to switch on Full Disk Access for it again.
+**Updating:** once installed, the app checks for new versions daily (you can switch that off in Settings) and shows **Install Update** in its menu. It installs only signed releases from this repo, and only when you click. You can also replace the app in Applications by hand. Full Disk Access stays on unless a release changes the reader; then the setup window asks you to switch it on for the new one.
 
 `SHA256SUMS.txt` lists the files' checksums. The app is built from this tag by the workflow in `.github/workflows/release.yml`; you can also build it yourself with `npm run build:app`.

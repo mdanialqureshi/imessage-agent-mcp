@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  attestations: read # to check the previous release was built here
 
 jobs:
   build:
@@ -31,11 +32,19 @@ jobs:
         run: npm run safety:all
       - run: npm test
       # Reusing the last release's reader (when its inputs are unchanged) keeps people's Full
-      # Disk Access switched on across updates.
+      # Disk Access switched on across updates. Only a release this workflow provably built (its
+      # build provenance attestation) is reused; anything else, and the reader is built fresh.
       - name: Previous release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download --repo "$GITHUB_REPOSITORY" --pattern 'Messages-Agent-*.zip' --dir previous || echo "No previous release."
+        run: |
+          if ! gh release download --repo "$GITHUB_REPOSITORY" --pattern 'Messages-Agent-*.zip' --dir previous; then
+            echo "No previous release."
+          elif ! gh attestation verify previous/*.zip --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"; then
+            echo "::warning::The previous release's zip has no valid attestation from this workflow; building a fresh reader."
+            rm -rf previous
+          fi
       - name: Build the app (Apple silicon and Intel)
         run: |
           prev=$(ls previous/*.zip 2>/dev/null | head -1)
@@ -75,6 +84,17 @@ jobs:
           path: dist
       - name: The files match their checksums
         run: cd dist && sha256sum --check SHA256SUMS.txt
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      # The app installs an update only if its checksums carry this signature. The key is a
+      # repository secret only this job sees; nothing that runs third-party code ever has it.
+      - name: Sign the checksums for the in-app updater
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          test -n "$UPDATE_SIGNING_KEY" || { echo "::error::Add the UPDATE_SIGNING_KEY secret (see docs/security.md)."; exit 1; }
+          node scripts/sign-sums.mjs dist/SHA256SUMS.txt
       # Lets anyone check a download was built here from this tag: gh attestation verify <file> -R <repo>.
       # (GitHub only offers attestations for public repositories on most plans.)
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -87,5 +107,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.dmg dist/*.zip dist/SHA256SUMS.txt \
+          gh release create "$GITHUB_REF_NAME" dist/*.dmg dist/*.zip dist/SHA256SUMS.txt dist/SHA256SUMS.txt.sig \
             --title "Messages Agent $GITHUB_REF_NAME" --notes-file .github/release-notes.md

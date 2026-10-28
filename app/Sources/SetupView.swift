@@ -234,10 +234,17 @@ struct ServiceStep: View {
           Text("It's currently installed from \(s?.install.program ?? "another copy"). Installing here replaces that; your items are kept.")
             .font(.callout)
         }
-        Button("Install") { Task { await model.installService() } }
-          .buttonStyle(.borderedProminent)
-          .disabled(!interpreterOK || model.busy != nil)
-        if !interpreterOK { Text("Finish step 1 first.").font(.callout).foregroundStyle(.secondary) }
+        if model.busyCommand == "install-service" {
+          HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("Installing… this takes a few seconds.").foregroundStyle(.secondary)
+          }
+        } else {
+          Button(s?.install.state == "other" ? "Install Here" : "Install") { Task { await model.installService() } }
+            .buttonStyle(.borderedProminent)
+            .disabled(!interpreterOK || model.busy != nil)
+          if !interpreterOK { Text("Finish step 1 first.").font(.callout).foregroundStyle(.secondary) }
+        }
       }
     }
   }
@@ -350,6 +357,8 @@ struct AppsStep: View {
           Spacer()
           if !app.installed {
             Text("Not installed").foregroundStyle(.secondary)
+          } else if model.busyCommand == "connect-app \(app.id)" || model.busyCommand == "disconnect-app \(app.id)" {
+            ProgressView().controlSize(.small)
           } else {
             Button(app.connected ? "Disconnect" : elsewhere ? "Reconnect" : "Connect") { Task { await model.setConnected(app, !app.connected) } }
               .disabled(!(model.status?.serviceReady ?? false) || model.busy != nil)

@@ -967,6 +967,7 @@ test('the update check reads only well-formed, newer releases from this repo', a
     assets: [
       { name: `Messages-Agent-${tag.slice(1)}.zip`, browser_download_url: dl(tag.slice(1), `Messages-Agent-${tag.slice(1)}.zip`), size: 1000 },
       { name: 'SHA256SUMS.txt', browser_download_url: dl(tag.slice(1), 'SHA256SUMS.txt'), size: 100 },
+      { name: 'SHA256SUMS.txt.sig', browser_download_url: dl(tag.slice(1), 'SHA256SUMS.txt.sig'), size: 89 },
     ],
     ...extra,
   });
@@ -983,4 +984,34 @@ test('the update check reads only well-formed, newer releases from this repo', a
   (elsewhere.assets[0] as { browser_download_url: string }).browser_download_url = 'https://evil.example.com/Messages-Agent-0.3.0.zip';
   await assert.rejects(latestRelease('0.2.0', serve(200, elsewhere)), /missing/);
   await assert.rejects(latestRelease('0.2.0', serve(500, {})), /500/);
+  // An unsigned release is never offered.
+  const unsigned = release('v0.3.0');
+  unsigned.assets.pop();
+  await assert.rejects(latestRelease('0.2.0', serve(200, unsigned)), /signature/);
+  // The zip's own listing is checked before anything is unpacked.
+  const { checkZipListing } = await import('../src/update.ts');
+  const zipWith = (names: [string, number][]) => {
+    const cd: Buffer[] = [];
+    for (const [name, mode] of names) {
+      const h = Buffer.alloc(46);
+      h.writeUInt32LE(0x02014b50, 0);
+      h.writeUInt16LE(Buffer.byteLength(name), 28);
+      h.writeUInt32LE((mode << 16) >>> 0, 38);
+      cd.push(h, Buffer.from(name));
+    }
+    const dirBuf = Buffer.concat(cd);
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50, 0);
+    end.writeUInt16LE(names.length, 10);
+    end.writeUInt32LE(dirBuf.length, 12);
+    end.writeUInt32LE(4, 16);
+    return Buffer.concat([Buffer.alloc(4), dirBuf, end]);
+  };
+  const top = 'Messages Agent.app';
+  assert.doesNotThrow(() => checkZipListing(zipWith([[`${top}/`, 0o40755], [`${top}/Contents/Info.plist`, 0o100644]]), top));
+  assert.throws(() => checkZipListing(zipWith([[`${top}/Contents/link`, 0o120755]]), top), /link/);
+  assert.throws(() => checkZipListing(zipWith([[`${top}/../../evil`, 0o100644]]), top), /unexpected file/);
+  assert.throws(() => checkZipListing(zipWith([['/tmp/evil', 0o100644]]), top), /unexpected file/);
+  assert.throws(() => checkZipListing(zipWith([['Other.app/x', 0o100644]]), top), /unexpected file/);
+  assert.throws(() => checkZipListing(Buffer.from('not a zip at all, just some bytes here'), top), /isn't a zip/);
 });

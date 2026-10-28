@@ -139,6 +139,9 @@ try {
   for (const f of ['package.json', 'package-lock.json', 'LICENSE']) fs.copyFileSync(path.join(root, f), path.join(res, f));
   fs.cpSync(path.join(root, 'src'), path.join(res, 'src'), { recursive: true });
   run('npm', ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: res, stdio: ['ignore', 'ignore', 'inherit'] });
+  // Command shims nothing here runs; without them the app holds no symlinks, so an update
+  // can refuse any zip that has one.
+  fs.rmSync(path.join(res, 'node_modules/.bin'), { recursive: true, force: true });
   // Everything in Resources is data the app's signature seals; native code there would need its own.
   const nativeCode = fs.readdirSync(res, { recursive: true }).filter((f) => /\.(node|dylib|so)$/.test(f));
   if (nativeCode.length) throw new Error(`unexpected native code in dependencies: ${nativeCode.join(', ')}`);

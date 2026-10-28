@@ -111,7 +111,9 @@ function cliApp(
     registered: () => isBridge(current() ?? ''),
     connectedTo: (cli) => {
       const text = current() ?? '';
-      return isBridge(text) && text.includes(cli);
+      // The whole path, not part of a longer one (~/Applications/X.app contains /Applications/X.app).
+      const escaped = cli.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return isBridge(text) && new RegExp(`(^|[\\s'"=,\\[])${escaped}($|[\\s'",\\]])`, 'm').test(text);
     },
     register: (command) => {
       const bin = cli();
