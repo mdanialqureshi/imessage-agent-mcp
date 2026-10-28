@@ -17,6 +17,9 @@ final class Model: ObservableObject {
   @Published private(set) var busyCommand: String?
   /// Why the last action failed.
   @Published var problem: String?
+  /// The service installed from here never answered, so the page offers Install again.
+  @Published private(set) var serviceStalled = false
+  private var serviceWatch: Task<Void, Never>?
   @Published private(set) var brief = ""
   @Published private(set) var appHasFullDiskAccess = false
   /// A newer release on GitHub, from the daily check (or "Check for Updates…").
@@ -237,6 +240,8 @@ final class Model: ObservableObject {
   /// Runs one CLI command as a user action, then refreshes. True if it succeeded.
   @discardableResult
   func act(_ label: String, _ args: [String], full: Bool = false) async -> Bool {
+    // One action at a time (an update counts), and never from previews.
+    guard busy == nil, !previewing else { return false }
     busy = label
     busyCommand = args.joined(separator: " ")
     problem = nil
@@ -255,7 +260,29 @@ final class Model: ObservableObject {
   }
 
   func installService() async {
+    serviceStalled = false
     await act("Installing the background service…", ["install-service"])
+  }
+
+  /// A service installed from here that isn't answering yet: checks every 2 seconds, installs
+  /// it again once after half a minute, and gives up after two minutes. Only one watch runs.
+  func watchService() {
+    guard serviceWatch == nil, !previewing, !serviceStalled else { return }
+    serviceWatch = Task {
+      defer { serviceWatch = nil }
+      for tries in 1...60 {
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        guard let s = status, !s.serviceReady, s.install.state == "this" else { return }
+        if busy != nil { continue } // Something else is running (an install, an update): wait.
+        if tries == 15 {
+          await installService()
+        } else {
+          await refresh()
+        }
+      }
+      serviceStalled = true
+      problem = "The background service didn't start. Click Install to try again."
+    }
   }
 
   func setConnected(_ app: Status.AppInfo, _ on: Bool) async {
@@ -287,7 +314,9 @@ final class Model: ObservableObject {
     guard let s = status, s.install.state == "other", let program = s.install.program,
           program.contains(".app/Contents/Resources/app/"), !FileManager.default.fileExists(atPath: program), !Backend.mustMove
     else { return }
-    if await act("Updating after the app moved…", ["install-service"]) {
+    // Installed here even if it's slow to answer: reconnect the apps to this copy either way.
+    await act("Updating after the app moved…", ["install-service"])
+    if status?.install.state == "this" {
       for app in apps where app.connected || app.elsewhere == true { await setConnected(app, true) }
     }
   }
