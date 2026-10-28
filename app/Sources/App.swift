@@ -176,7 +176,7 @@ enum SelfTest {
     }
     do {
       let s = try JSONDecoder().decode(Status.self, from: data)
-      guard s.mode == "app", s.reader.path == Backend.reader.path, s.reader.valid else {
+      guard s.mode == "app", s.reader.path.hasSuffix("/Applications/Messages Agent Reader.app"), s.reader.valid else {
         print("self-test failed: mode=\(s.mode) reader=\(s.reader.path) valid=\(s.reader.valid)")
         exit(1)
       }

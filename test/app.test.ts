@@ -102,8 +102,8 @@ test('in the app, the CLI uses the bundled Node and reader', { skip }, () => {
   assert.equal(res.status, 0, res.stderr);
   const status = JSON.parse(res.stdout);
   assert.equal(status.mode, 'app');
-  assert.equal(status.reader.path, reader);
-  assert.equal(status.reader.valid, true);
+  assert.equal(status.reader.path, path.join(home, 'Applications/Messages Agent Reader.app'), 'installed outside the app');
+  assert.equal(status.reader.valid, true, 'the reader it ships is intact');
   assert.equal(status.install.state, 'none');
   // Agents paste it into a shell, and the app's name has a space: it must survive word splitting.
   const echoed = spawnSync('/bin/sh', ['-c', `printf '%s\\n' ${status.callCommand.replace(/ call$/, '')}`], { encoding: 'utf8' });

@@ -8,7 +8,8 @@ enum Backend {
   static let bundle = Bundle.main.bundleURL
   static let node = bundle.appendingPathComponent("Contents/Helpers/node")
   static let cli = bundle.appendingPathComponent("Contents/Resources/app/src/cli.ts")
-  static let reader = bundle.appendingPathComponent("Contents/Helpers/Messages Agent Reader.app")
+  /// The reader the app ships; installing the service copies it to ~/Applications (see the status's reader.path).
+  static let shippedReader = bundle.appendingPathComponent("Contents/Helpers/Messages Agent Reader.app")
   static let home = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.hasPrefix("/") ? $0 : nil } ?? NSHomeDirectory()
 
   /// Opened from a disk image or a quarantined download, macOS runs a read-only copy from a

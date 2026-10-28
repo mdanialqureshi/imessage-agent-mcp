@@ -15,12 +15,15 @@ export const READER_LABEL = 'com.imessage-agent-mcp.reader';
 export const usingMirror = () => process.env.IMESSAGE_AGENT_MIRROR === '1';
 
 /**
- * The reader is a small app. The Mac app ships one prebuilt inside it; a clone builds one in
- * ~/Applications, where Finder and the Full Disk Access file picker can find it (~/Library is
- * hidden). A new build has a new signature, so macOS asks for access again.
+ * The reader is a small app in ~/Applications, where Finder and the Full Disk Access file
+ * picker can find it (~/Library is hidden). A clone builds it there; the Mac app ships one
+ * prebuilt and copies it there, because macOS counts a program run from inside an app as that
+ * app, so a reader left inside Messages Agent.app would need the whole app to have access. A
+ * new build has a new signature, so macOS asks for access again.
  */
-export const readerApp = () =>
-  appBundle ? path.join(appBundle, 'Contents/Helpers/Messages Agent Reader.app') : path.join(os.homedir(), 'Applications', 'Messages Agent Reader.app');
+export const readerApp = () => path.join(os.homedir(), 'Applications', 'Messages Agent Reader.app');
+/** The reader the Mac app ships, inside it (null for a clone). */
+export const shippedReader = () => (appBundle ? path.join(appBundle, 'Contents/Helpers/Messages Agent Reader.app') : null);
 export const readerBinary = (app = readerApp()) => path.join(app, 'Contents/MacOS/imessage-agent-reader');
 
 /**
@@ -81,22 +84,30 @@ export function readerCdHash(app = readerApp()): string | null {
   return /^CDHash=([0-9a-f]+)$/m.exec(info.stderr ?? '')?.[1] ?? null;
 }
 
-/** A clone's reader, which the Mac app replaces with its own. */
+/** Where both a clone and the Mac app install the reader. */
 export const CLI_READER_APP = path.join(os.homedir(), 'Applications', 'Messages Agent Reader.app');
 /** Where a clone built the reader before it was renamed; removed when the new one is built. */
 export const LEGACY_CLI_READER_APP = path.join(os.homedir(), 'Applications', 'imessage-agent-reader.app');
 
 /**
- * Makes sure the reader is in place. The app ships its own; a clone compiles one with Apple's
- * Command Line Tools, only when its source changed or the installed one isn't exactly what was
- * built: a new build has a new signature, so macOS asks for Full Disk Access again. Returns
- * true if it built one. Readers an earlier install used stay until the new service is running
- * (see removeOldReaders), so a failed install leaves the old one working.
+ * Makes sure the reader is in place. The app copies out the one it ships; a clone compiles one
+ * with Apple's Command Line Tools. Either happens only when the installed one isn't exactly
+ * that reader: a new build has a new signature, so macOS asks for Full Disk Access again.
+ * Returns true if it put one in place. Readers an earlier install used stay until the new
+ * service is running (see removeOldReaders), so a failed install leaves the old one working.
  */
-export function installReader(source: string, { app = readerApp(), stateDir = paths.stateDir, inApp = Boolean(appBundle) } = {}): boolean {
+export function installReader(
+  source: string,
+  { app = readerApp(), stateDir = paths.stateDir, inApp = Boolean(appBundle), shipped = shippedReader() } = {},
+): boolean {
   if (inApp) {
-    if (!readerCdHash(app)) throw new Error('the reader inside Messages Agent.app is missing or damaged; download the app again');
-    return false;
+    const want = shipped && readerCdHash(shipped);
+    if (!want) throw new Error('the reader inside Messages Agent.app is missing or damaged; download the app again');
+    if (readerCdHash(app) === want) return false;
+    return putInPlace(app, stateDir, (tmp) => {
+      execFileSync('/usr/bin/ditto', ['--norsrc', '--noextattr', '--noacl', '--noqtn', shipped, tmp], { stdio: 'ignore' });
+      if (readerCdHash(tmp) !== want) throw new Error("the reader copied from Messages Agent.app didn't verify");
+    });
   }
   const stamp = path.join(stateDir, 'reader.sha256'); // Outside the app: changing the app breaks its signature.
   const hash = createHash('sha256').update(fs.readFileSync(source)).update(JSON.stringify(READER_BUILD)).update(READER_INFO).digest('hex');
@@ -105,19 +116,26 @@ export function installReader(source: string, { app = readerApp(), stateDir = pa
   if (spawnSync('/usr/bin/xcode-select', ['-p'], { stdio: 'ignore' }).status !== 0) {
     throw new Error("its reader is built with Apple's Command Line Tools: run `xcode-select --install`, then setup again");
   }
+  return putInPlace(app, stateDir, (tmp) => {
+    compileReader(source, tmp);
+    const fresh = readerCdHash(tmp);
+    if (!fresh) throw new Error("the reader's signature didn't verify after building it");
+    fs.writeFileSync(stamp, `${hash} ${fresh}\n`);
+  });
+}
+
+/** Makes a reader in a private folder with `make`, then moves it to `app` in place of the old one. */
+function putInPlace(app: string, stateDir: string, make: (tmp: string) => void): true {
   fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   privateApplicationsDir(path.dirname(app));
   const tmp = path.join(stateDir, 'reader-build.app'); // Usually the same disk as ~/Applications, so the move is a rename.
   fs.rmSync(tmp, { recursive: true, force: true });
   try {
-    compileReader(source, tmp);
-    const fresh = readerCdHash(tmp);
-    if (!fresh) throw new Error("the reader's signature didn't verify after building it");
+    make(tmp);
     // Only ever replaces a reader: anything else already there is left alone.
     removeReaderBundle(app);
     if (fs.existsSync(app) || fs.lstatSync(app, { throwIfNoEntry: false })) throw new Error(`${app} already exists and isn't this project's reader; move it away first`);
     fs.renameSync(tmp, app);
-    fs.writeFileSync(stamp, `${hash} ${fresh}\n`);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -125,13 +143,12 @@ export function installReader(source: string, { app = readerApp(), stateDir = pa
 }
 
 /**
- * Once the new service is running: removes readers this one no longer uses (a clone's, when the
- * app took over, and the one from before the rename), and where older versions kept it.
+ * Once the new service is running: removes readers this one no longer uses (the one from before
+ * the rename), and where older versions kept it.
  */
-export function removeOldReaders({ stateDir = paths.stateDir, inApp = Boolean(appBundle), cliReader = CLI_READER_APP, legacyReader = LEGACY_CLI_READER_APP } = {}): void {
+export function removeOldReaders({ stateDir = paths.stateDir, legacyReader = LEGACY_CLI_READER_APP } = {}): void {
   fs.rmSync(path.join(stateDir, 'bin'), { recursive: true, force: true });
   removeReaderBundle(legacyReader);
-  if (inApp) removeReaderBundle(cliReader);
 }
 
 /**

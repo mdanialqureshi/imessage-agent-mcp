@@ -371,7 +371,7 @@ struct AccessStep: View {
                 NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
               }
               .buttonStyle(.borderedProminent)
-              CopyButton(text: Backend.reader.path, label: "Copy Path")
+              CopyButton(text: ReaderTile.url(model.status).path, label: "Copy Path")
             }
             .padding(.top, 4)
             HStack(spacing: 6) {
@@ -401,16 +401,25 @@ struct AccessStep: View {
 
 /// The reader's icon, draggable straight into System Settings' Full Disk Access list.
 struct ReaderTile: View {
+  @EnvironmentObject var model: Model
+
+  /// The installed reader (outside the app), or the one the app ships until it's installed.
+  static func url(_ s: Status?) -> URL {
+    if let p = s?.reader.path, FileManager.default.fileExists(atPath: p) { return URL(fileURLWithPath: p) }
+    return Backend.shippedReader
+  }
+
   var body: some View {
+    let reader = Self.url(model.status)
     VStack(spacing: 6) {
-      Image(nsImage: NSWorkspace.shared.icon(forFile: Backend.reader.path)).resizable().frame(width: 64, height: 64)
+      Image(nsImage: NSWorkspace.shared.icon(forFile: reader.path)).resizable().frame(width: 64, height: 64)
       Text("Messages Agent Reader").font(.caption.bold())
       Text("Drag me").font(.caption2).foregroundStyle(.secondary)
     }
     .padding(12)
     .frame(width: 150)
     .background(RoundedRectangle(cornerRadius: 10).strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [5])).foregroundStyle(.secondary))
-    .onDrag { NSItemProvider(object: Backend.reader as NSURL) }
+    .onDrag { NSItemProvider(object: reader as NSURL) }
     .help("Drag this into System Settings → Privacy & Security → Full Disk Access")
   }
 }

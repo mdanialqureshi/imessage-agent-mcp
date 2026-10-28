@@ -11,7 +11,7 @@ import { interpretNow } from './interpret/run.ts';
 import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
 import { Conversations } from './messages/conversations.ts';
-import { assertOnlyYoursToChange, CLI_READER_APP, installReader, LEGACY_CLI_READER_APP, READER_LABEL, removeOldReaders, removeReaderBundle, readerApp, readerBinary, readerCdHash, readerStatus, STALE_MS } from './messages/mirror.ts';
+import { assertOnlyYoursToChange, CLI_READER_APP, installReader, LEGACY_CLI_READER_APP, READER_LABEL, removeOldReaders, removeReaderBundle, readerApp, readerBinary, readerCdHash, shippedReader, readerStatus, STALE_MS } from './messages/mirror.ts';
 import { APPS, which } from './apps.ts';
 import { bridge, callTool, type ServiceHealth, serviceHealth } from './bridge.ts';
 import { serveSocket, socketPath } from './server.ts';
@@ -84,8 +84,8 @@ async function doctor(): Promise<void> {
   });
   if (health) {
     const ok = check('Full Disk Access', () => {
-      if (!fs.existsSync(readerBinary())) throw new Error(`the reader is missing (${appBundle ? 'download the app again' : SETUP_HINT})`);
-      if (!readerCdHash()) throw new Error(`the reader was changed or damaged (${appBundle ? 'download the app again' : 'run: node src/cli.ts setup to rebuild it'})`);
+      if (!fs.existsSync(readerBinary())) throw new Error(`the reader is missing (${appBundle ? 'open Messages Agent and install the service again' : SETUP_HINT})`);
+      if (!readerCdHash()) throw new Error(`the reader was changed or damaged (${appBundle ? 'open Messages Agent and install the service again' : 'run: node src/cli.ts setup to rebuild it'})`);
       if (!health.canReadMessages) {
         const status = readerStatus();
         if (readerChangedSinceGrant()) throw new Error(CHANGED_READER);
@@ -171,7 +171,7 @@ async function setup(): Promise<void> {
 
   console.log('\n2. Background service (runs on this Mac at login; Unix socket only, no network port)');
   try {
-    if (buildReader()) console.log(`   Built its reader, the only part that will hold Full Disk Access: ${readerApp()}`);
+    if (buildReader()) console.log(`   Installed its reader, the only part that will hold Full Disk Access: ${readerApp()}`);
   } catch (err: any) {
     console.log(`   ❌ ${err.message.split('\n')[0]}`);
     process.exitCode = 1;
@@ -214,7 +214,7 @@ async function setup(): Promise<void> {
     console.log(fdaHelp().replace(/^/gm, '   '));
     if (!flag('no-open')) {
       const pane = spawnSync('/usr/bin/open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles']).status === 0;
-      const shown = spawnSync('/usr/bin/open', ['-R', readerApp()]).status === 0; // Inside the app, Finder opens its package.
+      const shown = spawnSync('/usr/bin/open', ['-R', readerApp()]).status === 0;
       if (pane && shown) console.log('   Opened Full Disk Access in System Settings and showed Messages Agent Reader in Finder: drag it into the list.');
     }
     if (process.stdout.isTTY && !flag('no-wait')) {
@@ -423,7 +423,7 @@ async function statusJson(): Promise<void> {
     service: { running: Boolean(health) },
     reader: {
       path: readerApp(),
-      valid: Boolean(readerCdHash()),
+      valid: Boolean(readerCdHash(shippedReader() ?? readerApp())), // In the app: the one it ships (it copies it out).
       access,
       changedSinceGrant: access !== 'ok' && readerChangedSinceGrant(),
       ...(health?.canReadMessages ? { messages: health.messages, contacts: health.contacts } : {}),
@@ -637,7 +637,7 @@ function uninstallService(): void {
   }
   fs.rmSync(socketPath(), { force: true });
   for (const name of ['mirror', 'reader-status', 'reader-granted', 'reader.sha256', 'reader-build.app', 'bin']) fs.rmSync(path.join(paths.stateDir, name), { recursive: true, force: true });
-  for (const reader of [CLI_READER_APP, LEGACY_CLI_READER_APP]) removeReaderBundle(reader); // The app's own reader goes when the app is deleted.
+  for (const reader of [CLI_READER_APP, LEGACY_CLI_READER_APP]) removeReaderBundle(reader); // The one inside the app goes when the app is deleted.
   console.log(`Removed the background service (${LABEL}), its reader and its copy of Messages.`);
 }
 

@@ -689,9 +689,21 @@ test("a clone's reader is rebuilt only when needed, and never into a folder othe
   fs.symlinkSync(apps, linked);
   assert.throws(() => installReader(source, { ...opts, app: path.join(linked, 'Messages Agent Reader.app') }), /folder you own/);
 
-  // In the Mac app, nothing is built: the bundled reader must be intact.
-  assert.equal(installReader(source, { ...opts, inApp: true }), false);
-  assert.throws(() => installReader(source, { ...opts, app: path.join(base, 'missing.app'), inApp: true }), /missing or damaged/);
+  // In the Mac app, nothing is built: the reader it ships is copied out (macOS counts a program
+  // run from inside an app as that app), only when the copy isn't exactly it.
+  const copy = path.join(apps, 'Copied Reader.app');
+  const inApp = { app: copy, stateDir, inApp: true, shipped: app };
+  assert.equal(installReader(source, inApp), true, 'copied out');
+  assert.equal(readerCdHash(copy), cdhash);
+  assert.equal(installReader(source, inApp), false, 'the same reader: kept, so Full Disk Access stays on');
+  const copied = fs.readFileSync(readerBinary(copy));
+  copied[0x2000] ^= 0xff;
+  fs.writeFileSync(readerBinary(copy), copied);
+  assert.equal(installReader(source, inApp), true, 'a changed copy is replaced');
+  assert.equal(readerCdHash(copy), cdhash);
+  assert.throws(() => installReader(source, { ...inApp, shipped: path.join(base, 'missing.app') }), /missing or damaged/);
+  assert.equal(readerCdHash(copy), cdhash, 'a damaged app leaves the copy alone');
+  assert.ok(!fs.existsSync(path.join(stateDir, 'reader-build.app')));
 });
 
 test('message text can never make an interpreter attach a file', async () => {
@@ -950,12 +962,10 @@ test('removing an old reader deletes only a reader this project built', async ()
   const legacyReader = path.join(apps, 'legacy.app');
   bundle(cliReader, READER_INFO);
   bundle(legacyReader, READER_INFO);
-  assert.throws(() => installReader('/nonexistent.c', { app: path.join(base, 'missing.app'), stateDir: path.join(base, 'state'), inApp: true }));
+  assert.throws(() => installReader('/nonexistent.c', { app: cliReader, stateDir: path.join(base, 'state'), inApp: true, shipped: path.join(base, 'missing.app') }));
   assert.ok(fs.existsSync(cliReader) && fs.existsSync(legacyReader), 'a failed install keeps the readers in use');
-  removeOldReaders({ stateDir: path.join(base, 'state'), inApp: false, cliReader, legacyReader });
-  assert.ok(fs.existsSync(cliReader) && !fs.existsSync(legacyReader), "a clone keeps its own reader");
-  removeOldReaders({ stateDir: path.join(base, 'state'), inApp: true, cliReader, legacyReader });
-  assert.ok(!fs.existsSync(cliReader), "the app removes the clone's");
+  removeOldReaders({ stateDir: path.join(base, 'state'), legacyReader });
+  assert.ok(fs.existsSync(cliReader) && !fs.existsSync(legacyReader), 'the reader in use stays; the old one goes');
 });
 
 test('the update check reads only well-formed, newer releases from this repo', async () => {
