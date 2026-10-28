@@ -87,21 +87,15 @@ export const CLI_READER_APP = path.join(os.homedir(), 'Applications', 'Messages 
 export const LEGACY_CLI_READER_APP = path.join(os.homedir(), 'Applications', 'imessage-agent-reader.app');
 
 /**
- * Makes sure the reader is in place. The app ships its own, so a reader left by a clone is
- * removed. A clone compiles one with Apple's Command Line Tools, only when its source changed
- * or the installed one isn't exactly what was built: a new build has a new signature, so macOS
- * asks for Full Disk Access again. Returns true if it built one.
+ * Makes sure the reader is in place. The app ships its own; a clone compiles one with Apple's
+ * Command Line Tools, only when its source changed or the installed one isn't exactly what was
+ * built: a new build has a new signature, so macOS asks for Full Disk Access again. Returns
+ * true if it built one. Readers an earlier install used stay until the new service is running
+ * (see removeOldReaders), so a failed install leaves the old one working.
  */
-export function installReader(
-  source: string,
-  { app = readerApp(), stateDir = paths.stateDir, inApp = Boolean(appBundle), cliReader = CLI_READER_APP, legacyReader = LEGACY_CLI_READER_APP } = {},
-): boolean {
-  // Where older versions kept it.
-  fs.rmSync(path.join(stateDir, 'bin'), { recursive: true, force: true });
-  removeReaderBundle(legacyReader);
+export function installReader(source: string, { app = readerApp(), stateDir = paths.stateDir, inApp = Boolean(appBundle) } = {}): boolean {
   if (inApp) {
     if (!readerCdHash(app)) throw new Error('the reader inside Messages Agent.app is missing or damaged; download the app again');
-    removeReaderBundle(cliReader);
     return false;
   }
   const stamp = path.join(stateDir, 'reader.sha256'); // Outside the app: changing the app breaks its signature.
@@ -128,6 +122,16 @@ export function installReader(
     fs.rmSync(tmp, { recursive: true, force: true });
   }
   return true;
+}
+
+/**
+ * Once the new service is running: removes readers this one no longer uses (a clone's, when the
+ * app took over, and the one from before the rename), and where older versions kept it.
+ */
+export function removeOldReaders({ stateDir = paths.stateDir, inApp = Boolean(appBundle), cliReader = CLI_READER_APP, legacyReader = LEGACY_CLI_READER_APP } = {}): void {
+  fs.rmSync(path.join(stateDir, 'bin'), { recursive: true, force: true });
+  removeReaderBundle(legacyReader);
+  if (inApp) removeReaderBundle(cliReader);
 }
 
 /**
@@ -252,7 +256,7 @@ export function readerStatus(): ReaderStatus | null {
 
 export const NEEDS_ACCESS =
   "The Messages Agent service on the user's Mac can't read Messages yet: its reader needs Full Disk Access " +
-  '(run `node src/cli.ts doctor` on the Mac).';
+  `(${appBundle ? 'open Messages Agent on the Mac to finish setting up' : 'run `node src/cli.ts doctor` on the Mac'}).`;
 
 /** A copy older than this means the reader has stopped answering, so it isn't used. */
 export const STALE_MS = 10 * 60_000;
@@ -261,7 +265,7 @@ export const STALE_MS = 10 * 60_000;
 export function mirrorProblem(status: ReaderStatus | null): string | null {
   if (status?.ok) {
     if (Date.now() - status.at < STALE_MS) return null;
-    return "The Messages Agent service's copy of Messages is out of date because its reader isn't answering (run `node src/cli.ts doctor` on the Mac).";
+    return `The Messages Agent service's copy of Messages is out of date because its reader isn't answering (${appBundle ? 'open Messages Agent on the Mac' : 'run `node src/cli.ts doctor` on the Mac'}).`;
   }
   if (!status || status.error === 'EPERM') return NEEDS_ACCESS;
   return "The Messages Agent service on the user's Mac couldn't copy Messages just now. Try again in a minute.";

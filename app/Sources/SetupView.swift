@@ -3,30 +3,34 @@ import SwiftUI
 
 struct SetupView: View {
   @EnvironmentObject var model: Model
+  /// Every step at full height, unscrolled (for previews of the whole window's content).
+  var unrolled = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       header
       Divider()
-      ScrollView {
-        VStack(alignment: .leading, spacing: 22) {
-          if Backend.mustMove || model.previewMustMove {
-            MoveFirst()
-          } else if model.appHasFullDiskAccess {
-            AppHasAccess()
-          } else {
-            InterpreterStep()
-            ServiceStep()
-            AccessStep()
-            AppsStep()
-            AgentStep()
-          }
-        }
-        .padding(24)
-      }
+      if unrolled { steps } else { ScrollView { steps } }
       footer
     }
-    .frame(width: 620, height: 720)
+    .frame(width: 620, height: unrolled ? nil : 720)
+  }
+
+  private var steps: some View {
+    VStack(alignment: .leading, spacing: 22) {
+      if Backend.mustMove || model.previewMustMove {
+        MoveFirst()
+      } else if model.appHasFullDiskAccess {
+        AppHasAccess()
+      } else {
+        InterpreterStep()
+        ServiceStep()
+        AccessStep()
+        AppsStep()
+        AgentStep()
+      }
+    }
+    .padding(24)
   }
 
   private var header: some View {
@@ -336,13 +340,18 @@ struct AppsStep: View {
       }
       ForEach(model.apps) { app in
         HStack {
-          Image(systemName: app.connected ? "checkmark.circle.fill" : "circle").foregroundStyle(app.connected ? .green : .secondary)
-          Text(app.name)
+          let elsewhere = !app.connected && app.elsewhere == true
+          Image(systemName: app.connected ? "checkmark.circle.fill" : elsewhere ? "exclamationmark.circle" : "circle")
+            .foregroundStyle(app.connected ? .green : elsewhere ? .orange : .secondary)
+          VStack(alignment: .leading, spacing: 1) {
+            Text(app.name)
+            if elsewhere { Text("Connected to another copy of Messages Agent").font(.caption).foregroundStyle(.secondary) }
+          }
           Spacer()
           if !app.installed {
             Text("Not installed").foregroundStyle(.secondary)
           } else {
-            Button(app.connected ? "Disconnect" : "Connect") { Task { await model.setConnected(app, !app.connected) } }
+            Button(app.connected ? "Disconnect" : elsewhere ? "Reconnect" : "Connect") { Task { await model.setConnected(app, !app.connected) } }
               .disabled(!(model.status?.serviceReady ?? false) || model.busy != nil)
           }
         }

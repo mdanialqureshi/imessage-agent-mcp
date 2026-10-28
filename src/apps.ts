@@ -14,6 +14,8 @@ export interface App {
   reach: string;
   installed: () => boolean;
   registered: () => boolean;
+  /** Whether it's connected to this copy's bridge (and not, say, a clone the app replaced). */
+  connectedTo: (cli: string) => boolean;
   register: (command: string[]) => void;
   unregister: () => void;
 }
@@ -23,7 +25,7 @@ const home = os.homedir();
 /** Absolute path of a CLI on PATH, or null. */
 export function which(name: string): string | null {
   try {
-    return execFileSync('/usr/bin/which', [name], { encoding: 'utf8' }).trim() || null;
+    return execFileSync('/usr/bin/which', [name], { encoding: 'utf8', timeout: 10_000 }).trim() || null;
   } catch {
     return null;
   }
@@ -31,7 +33,7 @@ export function which(name: string): string | null {
 
 const quiet = (cmd: string, args: string[]) => {
   try {
-    return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000 });
   } catch {
     return null;
   }
@@ -45,7 +47,7 @@ const isBridge = (text: string) => /cli\.ts\b/.test(text) && /\bconnect\b/.test(
 const NOT_OURS = `an unrelated MCP server named "${SERVER_NAME}" is already configured; rename or remove it first`;
 
 /** Apps configured by a JSON file with an `mcpServers` map (Claude Desktop, Cursor). */
-export function jsonApp(file: string): Pick<App, 'registered' | 'register' | 'unregister'> {
+export function jsonApp(file: string): Pick<App, 'registered' | 'connectedTo' | 'register' | 'unregister'> {
   const read = (): Record<string, any> => {
     if (!fs.existsSync(file)) return {};
     let config: unknown;
@@ -63,21 +65,25 @@ export function jsonApp(file: string): Pick<App, 'registered' | 'register' | 'un
   const ours = (e: any) => isPlainObject(e) && isBridge(JSON.stringify([e.command, e.args]));
   const write = (config: Record<string, any>) => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    const backup = `${file}.before-imessage-agent`;
-    if (fs.existsSync(file) && !fs.existsSync(backup)) fs.copyFileSync(file, backup);
     fs.writeFileSync(file, JSON.stringify(config, null, 2) + '\n');
   };
+  const ourEntry = () => {
+    try {
+      const e = entry(read());
+      return ours(e) ? JSON.stringify([e.command, e.args]) : null;
+    } catch {
+      return null;
+    }
+  };
   return {
-    registered: () => {
-      try {
-        return ours(entry(read()));
-      } catch {
-        return false;
-      }
-    },
+    registered: () => ourEntry() !== null,
+    connectedTo: (cli) => Boolean(ourEntry()?.includes(JSON.stringify(cli))),
     register: ([command, ...args]) => {
       const config = read();
       if (entry(config) && !ours(entry(config))) throw new Error(NOT_OURS);
+      // A copy of the file as it was before this project first changed it.
+      const backup = `${file}.before-imessage-agent`;
+      if (fs.existsSync(file) && !fs.existsSync(backup)) fs.copyFileSync(file, backup);
       config.mcpServers = { ...config.mcpServers, [SERVER_NAME]: { command, args } };
       write(config);
     },
@@ -96,13 +102,17 @@ function cliApp(
   addArgs: string[],
   removeArgs: string[],
   configFile?: () => string,
-): Pick<App, 'registered' | 'register' | 'unregister'> {
+): Pick<App, 'registered' | 'connectedTo' | 'register' | 'unregister'> {
   const current = () => {
     const bin = cli();
     return bin ? quiet(bin, ['mcp', 'get', SERVER_NAME]) : null;
   };
   return {
     registered: () => isBridge(current() ?? ''),
+    connectedTo: (cli) => {
+      const text = current() ?? '';
+      return isBridge(text) && text.includes(cli);
+    },
     register: (command) => {
       const bin = cli();
       if (!bin) throw new Error('CLI not found');
@@ -111,7 +121,7 @@ function cliApp(
       const file = configFile?.();
       if (file && fs.existsSync(file) && !fs.existsSync(`${file}.before-imessage-agent`)) fs.copyFileSync(file, `${file}.before-imessage-agent`);
       if (existing) quiet(bin, ['mcp', 'remove', ...removeArgs, SERVER_NAME]);
-      execFileSync(bin, ['mcp', 'add', ...addArgs, SERVER_NAME, '--', ...command], { stdio: ['ignore', 'pipe', 'pipe'] });
+      execFileSync(bin, ['mcp', 'add', ...addArgs, SERVER_NAME, '--', ...command], { stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000 });
     },
     unregister: () => {
       const bin = cli();

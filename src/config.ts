@@ -98,7 +98,14 @@ export function loadConfig(): Config {
     fs.writeFileSync(file, JSON.stringify(defaults, null, 2) + '\n', { mode: 0o600 });
     return structuredClone(defaults);
   }
-  const { http: _removed, ...user } = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<Config> & { http?: unknown };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err: any) {
+    throw new Error(`${file} isn't valid JSON (${err.message}). Fix it, or delete it to start from the defaults.`);
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error(`${file} must hold a JSON object. Fix it, or delete it to start from the defaults.`);
+  const { http: _removed, ...user } = parsed as Partial<Config> & { http?: unknown };
   const config = { ...defaults, ...user };
   // An environment override beats config.json, e.g. for one-off runs or the launchd plist.
   const fromEnv = process.env.IMESSAGE_AGENT_INTERPRETER as InterpreterName | undefined;

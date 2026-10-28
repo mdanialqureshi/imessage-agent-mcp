@@ -24,13 +24,21 @@ final class Model: ObservableObject {
   struct Update: Decodable, Equatable { let current: String; let latest: String?; let url: String? }
 
   private var refreshing = false
-  /// A refresh asked for while one was running (true if it should be a full one). It runs
-  /// next, so a status read before an action never has the last word.
-  private var queuedRefresh: Bool?
+  /// Callers waiting for a status read that starts after they asked (and whether they want the
+  /// full one), so an action never finishes on a status from before it.
+  private var waiting: [(full: Bool, done: CheckedContinuation<Void, Never>)] = []
+  /// The last "Couldn't check the status" problem, cleared once a check works again.
+  private var statusProblem: String?
+  /// Rendering previews: show the given state, run nothing.
+  private var previewing = false
   private var timer: Timer?
 
   /// Status first, then the slower interpreter and app checks; then every minute.
   func start() {
+    // Run from the disk image or a quarantined copy, it only asks to be moved: nothing it
+    // started from there could keep working.
+    guard !Backend.mustMove else { return }
+    NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { _ in Backend.stopAll() }
     Task {
       await refresh(full: true)
       await repairIfMoved()
@@ -98,20 +106,25 @@ final class Model: ObservableObject {
     }
   }
 
+  /// Reads the status; returns once a read that started after this call has finished.
   func refresh(full: Bool = false) async {
-    if refreshing {
-      queuedRefresh = (queuedRefresh ?? false) || full
-      return
+    guard !previewing, !Backend.mustMove else { return }
+    await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+      waiting.append((full, done))
+      guard !refreshing else { return }
+      refreshing = true
+      Task { await drainRefreshes() }
     }
-    refreshing = true
-    defer { refreshing = false }
-    var full = full
-    while true {
-      await refreshOnce(full: full)
-      guard let next = queuedRefresh else { return }
-      queuedRefresh = nil
-      full = next
+  }
+
+  private func drainRefreshes() async {
+    while !waiting.isEmpty {
+      let batch = waiting
+      waiting = []
+      await refreshOnce(full: batch.contains { $0.full })
+      for w in batch { w.done.resume() }
     }
+    refreshing = false
   }
 
   private func refreshOnce(full: Bool) async {
@@ -123,8 +136,11 @@ final class Model: ObservableObject {
     let res = await Backend.run(["status", "--json"] + (full ? ["--interpreters", "--apps"] : []), timeout: 90)
     guard res.ok, let data = res.out.data(using: .utf8), let next = try? JSONDecoder().decode(Status.self, from: data) else {
       problem = "Couldn't check the status: \(res.reason)"
+      statusProblem = problem
       return
     }
+    if problem != nil && problem == statusProblem { problem = nil }
+    statusProblem = nil
     status = next
     if let i = next.interpreters { interpreters = i }
     if let a = next.apps { apps = a }
@@ -182,7 +198,7 @@ final class Model: ObservableObject {
           program.contains(".app/Contents/Resources/app/"), !FileManager.default.fileExists(atPath: program), !Backend.mustMove
     else { return }
     if await act("Updating after the app moved…", ["install-service"]) {
-      for app in apps where app.connected { await setConnected(app, true) }
+      for app in apps where app.connected || app.elsewhere == true { await setConnected(app, true) }
     }
   }
 
@@ -200,6 +216,7 @@ final class Model: ObservableObject {
 
   /// For `--render-previews`: shows a given state without running anything.
   func preview(_ status: Status, mustMoveFirst: Bool = false) {
+    previewing = true
     self.status = status
     interpreters = status.interpreters ?? []
     apps = status.apps ?? []
@@ -210,6 +227,7 @@ final class Model: ObservableObject {
   /// One line for the menu.
   var summary: String {
     if appHasFullDiskAccess { return "Switch off Full Disk Access for Messages Agent" }
+    if Backend.mustMove { return "Move Messages Agent to Applications first" }
     guard let s = status else { return "Checking…" }
     if !s.serviceReady { return "Not set up yet" }
     switch s.reader.access {

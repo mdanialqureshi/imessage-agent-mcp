@@ -65,7 +65,7 @@ Needs [Node.js](https://nodejs.org) 23.6+ (`brew install node`) and Apple's Comm
 
 **Let an AI assistant do it.** Paste this into Claude Code or Codex (swap **claude** for **codex** to use your ChatGPT plan):
 
-> Set up imessage-agent-mcp on my Mac by following "Option 2: from the command line" in https://github.com/mdanialqureshi/imessage-agent-mcp. Use the **claude** interpreter. Clone it into ~/imessage-agent-mcp, run `npm ci`, then `node src/cli.ts setup --interpreter claude`. When it asks for Full Disk Access, tell me exactly what to do, wait for me, then run `node src/cli.ts doctor` until everything is ✅. Then show me how to connect my agents. Don't read or quote my messages while doing this.
+> Set up imessage-agent-mcp on my Mac by following "Option 2: from the command line" in https://github.com/mdanialqureshi/imessage-agent-mcp. Use the **claude** interpreter. Clone it into ~/imessage-agent-mcp, run `npm ci`, then `node src/cli.ts setup --interpreter claude`. When it asks for Full Disk Access, tell me exactly what to do, wait for me, then run `node src/cli.ts doctor` until it shows no ❌ (➖ lines are optional) and exits 0. Then show me how to connect my agents. Don't read or quote my messages while doing this.
 
 **Or do it yourself:**
 
@@ -134,7 +134,7 @@ The interpreter is the model that reads your new messages in the background: Cla
 
 ## Configuration
 
-The app's Settings change the common ones. All of them are in `~/Library/Application Support/imessage-agent-mcp/config.json` (or `node src/cli.ts config set <key> <value>`):
+The app's Settings change the common ones. All of them are in `~/Library/Application Support/imessage-agent-mcp/config.json` (or `node src/cli.ts config set <key> <json value>`, e.g. `config set autoInterpretMinutes 60` or `config set privateContacts '["Sam"]'`):
 
 | Key | Default | Meaning |
 |---|---|---|

@@ -80,6 +80,28 @@ enum Backend {
     ["HOME": home, "USER": NSUserName(), "PATH": path, "LANG": "en_US.UTF-8", "TMPDIR": NSTemporaryDirectory()]
   }
 
+  /// What the app started and hasn't finished, so quitting stops it too: nothing it started
+  /// keeps running after it.
+  private static let lock = NSLock()
+  nonisolated(unsafe) private static var running: [Int32: Process] = [:]
+
+  private static func track(_ p: Process, _ on: Bool) {
+    lock.lock()
+    defer { lock.unlock() }
+    running[p.processIdentifier] = on ? p : nil
+  }
+
+  /// When the app quits: stops everything it started (each in its own process group).
+  static func stopAll() {
+    lock.lock()
+    let all = Array(running.values)
+    lock.unlock()
+    guard !all.isEmpty else { return }
+    for p in all where p.isRunning { kill(-p.processIdentifier, SIGTERM) }
+    usleep(500_000)
+    for p in all where p.isRunning { kill(-p.processIdentifier, SIGKILL); kill(p.processIdentifier, SIGKILL) }
+  }
+
   /// `quiet` discards the program's output instead of collecting it, so nothing it leaves
   /// running can hold the call open past its timeout.
   static func run(_ exe: URL, _ args: [String], env: [String: String], timeout: TimeInterval, quiet: Bool = false) -> Output {
@@ -93,6 +115,8 @@ enum Backend {
       p.standardError = FileHandle.nullDevice
       p.standardInput = FileHandle.nullDevice
       do { try p.run() } catch { return Output(status: -1, out: "", err: error.localizedDescription) }
+      track(p, true)
+      defer { track(p, false) }
       let kill = DispatchWorkItem { forceStop(p) }
       DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: kill)
       p.waitUntilExit()
@@ -104,6 +128,9 @@ enum Backend {
     p.standardError = err
     p.standardInput = FileHandle.nullDevice
     do { try p.run() } catch { return Output(status: -1, out: "", err: error.localizedDescription) }
+    track(p, true)
+    defer { track(p, false) }
+    let pid = p.processIdentifier
     let kill = DispatchWorkItem { forceStop(p) }
     DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: kill)
     var o = Data(), e = Data()
@@ -113,8 +140,13 @@ enum Backend {
     group.enter()
     DispatchQueue.global().async { e = err.fileHandleForReading.readDataToEndOfFile(); group.leave() }
     p.waitUntilExit()
-    group.wait()
     kill.cancel()
+    // Something it started may still hold its output open: stop the rest of its group, and
+    // never wait on it for good.
+    if group.wait(timeout: .now() + 5) == .timedOut {
+      Darwin.kill(-pid, SIGKILL)
+      if group.wait(timeout: .now() + 2) == .timedOut { return Output(status: -1, out: "", err: "it left something running that wouldn't stop") }
+    }
     return Output(status: p.terminationStatus, out: String(decoding: o, as: UTF8.self), err: String(decoding: e, as: UTF8.self))
   }
 
@@ -148,7 +180,11 @@ struct Status: Decodable, Equatable {
   struct Service: Decodable, Equatable { let running: Bool }
   struct Reader: Decodable, Equatable { let path: String; let valid: Bool; let access: String; let changedSinceGrant: Bool?; let messages: Int?; let contacts: Int? }
   struct Interpreter: Decodable, Equatable, Identifiable { let name: String; let ok: Bool; let detail: String; var id: String { name } }
-  struct AppInfo: Decodable, Equatable, Identifiable { let id: String; let name: String; let installed: Bool; let connected: Bool }
+  struct AppInfo: Decodable, Equatable, Identifiable {
+    let id: String; let name: String; let installed: Bool; let connected: Bool
+    /// Connected to another copy (say, a clone this app replaced): it needs reconnecting.
+    let elsewhere: Bool?
+  }
   struct Items: Decodable, Equatable { let open: Int; let lastInterpretedAt: String? }
   struct Config: Decodable, Equatable { let autoInterpretMinutes: Int; let firstRunLookbackDays: Int; let privateContacts: [String]; let checkForUpdates: Bool? }
 

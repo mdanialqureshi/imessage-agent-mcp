@@ -55,7 +55,7 @@ struct MenuLabel: View {
         model.start()
         Task {
           // Wait for the first status before deciding.
-          for _ in 0..<100 where model.status == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+          for _ in 0..<100 where model.status == nil && !Backend.mustMove { try? await Task.sleep(nanoseconds: 100_000_000) }
           if Backend.mustMove || !(model.status?.ready ?? false) { open("setup") }
         }
       }

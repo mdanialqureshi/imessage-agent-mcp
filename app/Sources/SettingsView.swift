@@ -28,6 +28,7 @@ struct SettingsView: View {
           Text("Claude Code (Claude plan)").tag("claude")
           Text("Codex (ChatGPT plan)").tag("codex")
         }
+        .disabled(model.busy != nil)
         Picker("Check new messages", selection: Binding(
           get: { model.status?.config.autoInterpretMinutes ?? 120 },
           set: { minutes in Task { await model.setConfig("autoInterpretMinutes", String(minutes)) } }
@@ -37,6 +38,7 @@ struct SettingsView: View {
             Text("Every \(m) minutes").tag(m)
           }
         }
+        .disabled(model.busy != nil)
       }
       Section {
         TextEditor(text: $contacts)
@@ -64,6 +66,7 @@ struct SettingsView: View {
           get: { model.status?.config.checkForUpdates ?? true },
           set: { on in Task { await model.setConfig("checkForUpdates", on ? "true" : "false") } }
         ))
+        .disabled(model.busy != nil)
         HStack {
           VStack(alignment: .leading, spacing: 2) {
             Text("Version \(model.status?.version ?? "?")")

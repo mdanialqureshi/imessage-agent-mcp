@@ -11,7 +11,7 @@ import { interpretNow } from './interpret/run.ts';
 import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
 import { Conversations } from './messages/conversations.ts';
-import { assertOnlyYoursToChange, CLI_READER_APP, installReader, LEGACY_CLI_READER_APP, READER_LABEL, removeReaderBundle, readerApp, readerBinary, readerCdHash, readerStatus, STALE_MS } from './messages/mirror.ts';
+import { assertOnlyYoursToChange, CLI_READER_APP, installReader, LEGACY_CLI_READER_APP, READER_LABEL, removeOldReaders, removeReaderBundle, readerApp, readerBinary, readerCdHash, readerStatus, STALE_MS } from './messages/mirror.ts';
 import { APPS, which } from './apps.ts';
 import { bridge, callTool, type ServiceHealth, serviceHealth } from './bridge.ts';
 import { serveSocket, socketPath } from './server.ts';
@@ -29,15 +29,20 @@ const option = (name: string) => {
   return i >= 0 ? rest[i + 1] : undefined;
 };
 
+/** Prints one ✅/❌ line; a ❌ makes the command exit non-zero. */
 function check(label: string, fn: () => string): boolean {
   try {
     console.log(`✅ ${label}: ${fn()}`);
     return true;
   } catch (err: any) {
     console.log(`❌ ${label}: ${err.message.split('\n')[0]}`);
+    process.exitCode = 1;
     return false;
   }
 }
+
+/** How to (re)do setup from here: the app's window, or the clone's command. */
+const SETUP_HINT = appBundle ? 'open Messages Agent and follow its setup window' : 'run: node src/cli.ts setup';
 
 /** What desktop apps launch: the permission-less bridge to the background service. */
 function bridgeCommand(): string[] {
@@ -72,13 +77,14 @@ async function doctor(): Promise<void> {
   console.log('This Mac (everything runs here; no network port is opened)');
   const health = await serviceHealth(socketPath());
   check('Background service', () => {
-    if (!fs.existsSync(plistPath)) throw new Error('not installed (run: node src/cli.ts setup)');
+    if (!fs.existsSync(plistPath)) throw new Error(`not installed (${SETUP_HINT})`);
+    if (installedProgram() !== cliPath) throw new Error(`installed from another copy (${installedProgram()}); ${SETUP_HINT} to use this one`);
     if (!health) throw new Error(`installed but not responding; see ${path.join(paths.stateDir, 'logs/service.log')}`);
     return `running, listening only on ${socketPath()}`;
   });
   if (health) {
     const ok = check('Full Disk Access', () => {
-      if (!fs.existsSync(readerBinary())) throw new Error(`the reader is missing (${appBundle ? 'download the app again' : 'run: node src/cli.ts setup'})`);
+      if (!fs.existsSync(readerBinary())) throw new Error(`the reader is missing (${appBundle ? 'download the app again' : SETUP_HINT})`);
       if (!readerCdHash()) throw new Error(`the reader was changed or damaged (${appBundle ? 'download the app again' : 'run: node src/cli.ts setup to rebuild it'})`);
       if (!health.canReadMessages) {
         const status = readerStatus();
@@ -95,9 +101,18 @@ async function doctor(): Promise<void> {
     if (!ok) console.log(fdaHelp().replace(/^/gm, '   '));
   }
   for (const name of INTERPRETERS) {
-    const active = name === config.interpreter;
-    const ok = check(`Interpreter ${name}${active ? ' (active)' : ''}`, () => interpreterStatus(name));
-    if (!ok && active) console.log(`   Fix: sign in (\`${name === 'claude' ? 'claude' : 'codex login'}\`) or switch: node src/cli.ts use ${name === 'claude' ? 'codex' : 'claude'}`);
+    if (name === config.interpreter) {
+      const ok = check(`Interpreter ${name} (active)`, () => interpreterStatus(name));
+      const other = name === 'claude' ? 'codex' : 'claude';
+      if (!ok) console.log(`   Fix: sign in (\`${name === 'claude' ? 'claude' : 'codex login'}\`) or switch to ${other} (${appBundle ? 'in Messages Agent → Settings' : `node src/cli.ts use ${other}`})`);
+      continue;
+    }
+    // Not in use, so not a problem either way.
+    try {
+      console.log(`➖ Interpreter ${name}: not in use (${interpreterStatus(name)})`);
+    } catch (err: any) {
+      console.log(`➖ Interpreter ${name}: not in use (${String(err.message).split('\n')[0]})`);
+    }
   }
   check('State', () => {
     const store = Store.open();
@@ -109,8 +124,9 @@ async function doctor(): Promise<void> {
   console.log('\nApps that can use it (they launch the local bridge; cloud agents reach your Mac through them)');
   for (const app of APPS) {
     if (!app.installed()) console.log(`➖ ${app.name}: not installed`);
-    else if (app.registered()) console.log(`✅ ${app.name}: connected. ${app.reach}`);
-    else console.log(`➖ ${app.name}: installed, not connected (optional: node src/cli.ts setup --apps ${app.id})`);
+    else if (app.connectedTo(cliPath)) console.log(`✅ ${app.name}: connected. ${app.reach}`);
+    else if (app.registered()) check(app.name, () => { throw new Error(`connected to another copy of Messages Agent; reconnect it (${appBundle ? 'in the setup window' : `node src/cli.ts connect-app ${app.id}`})`); });
+    else console.log(`➖ ${app.name}: installed, not connected (optional: ${appBundle ? 'connect it in the setup window' : `node src/cli.ts connect-app ${app.id}`})`);
   }
   console.log(`\nAgents that run commands but don't list the imessage tools (e.g. Dot, for now) can use:\n   ${callCommand()}            lists the tools\n   ${callCommand()} <tool> '<json args>'`);
 }
@@ -133,8 +149,14 @@ function waitForService(ms: number): Promise<ServiceHealth | null> {
 /** One command: interpreter, background service, app connections, permission check. */
 async function setup(): Promise<void> {
   const chosen = option('interpreter');
-  if (chosen) useInterpreter(chosen);
+  if (chosen) {
+    if (!INTERPRETERS.includes(chosen as InterpreterName)) throw new Error(`--interpreter must be ${INTERPRETERS.join(' or ')}`);
+    useInterpreter(chosen);
+  }
   if (process.exitCode) return;
+  const only = option('apps')?.split(',').map((a) => a.trim());
+  const unknown = only?.filter((id) => !APPS.some((app) => app.id === id));
+  if (unknown?.length) throw new Error(`Unknown app ${unknown.join(', ')}; --apps takes ${APPS.map((a) => a.id).join(',')}`);
   const config = loadConfig();
 
   console.log(`\n1. Interpreter: ${config.interpreter}`);
@@ -155,7 +177,13 @@ async function setup(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  installService();
+  try {
+    installService();
+  } catch (err: any) {
+    console.log(`   ❌ ${err.message.split('\n')[0]}`);
+    process.exitCode = 1;
+    return;
+  }
   const health = await waitForService(15_000);
   if (!health) {
     console.log(`   ❌ didn't start; see ${path.join(paths.stateDir, 'logs/service.log')}`);
@@ -165,7 +193,6 @@ async function setup(): Promise<void> {
   console.log(`   ✅ running: ${socketPath()}`);
 
   console.log('\n3. Connecting your apps (each launches a local bridge to the service)');
-  const only = option('apps')?.split(',');
   const command = bridgeCommand();
   for (const app of APPS) {
     if (only && !only.includes(app.id)) continue;
@@ -311,7 +338,7 @@ function setConfig(key: string | undefined, raw: string | undefined): void {
   try {
     value = raw === undefined ? undefined : JSON.parse(raw);
   } catch {
-    value = undefined;
+    value = key === 'model' ? raw : undefined; // A bare model name needs no JSON quotes.
   }
   const expected = key && key !== 'interpreter' && Object.hasOwn(defaults, key) ? defaults[key] : undefined;
   const valid =
@@ -325,7 +352,19 @@ function setConfig(key: string | undefined, raw: string | undefined): void {
             ? Array.isArray(value) && value.length <= 1000 && value.every((v) => typeof v === 'string' && v.trim() && v.length <= 200)
             : false;
   if (!key || !valid) {
-    console.log(usage);
+    const why =
+      !key || (expected === undefined && key !== 'model')
+        ? key === 'interpreter'
+          ? 'To change the interpreter: node src/cli.ts use <claude|codex>'
+          : key ? `There's no setting called ${key}.` : ''
+        : key === 'model'
+          ? 'model is a model name (letters, digits, ".", "-", "_" or ":", starting with a letter or digit) or null.'
+          : typeof expected === 'number'
+            ? `${key} is a whole number from 0 to 100000.`
+            : typeof expected === 'boolean'
+              ? `${key} is true or false.`
+              : `${key} is a JSON list of up to 1000 non-empty strings of at most 200 characters, e.g. '["Sam", "sam@example.com"]'.`;
+    console.log([why, usage].filter(Boolean).join('\n'));
     process.exitCode = 1;
     return;
   }
@@ -353,9 +392,13 @@ const version = (): string => JSON.parse(fs.readFileSync(path.join(path.dirname(
  * the slower checks (each runs a CLI). Never includes message content or account details.
  */
 async function statusJson(): Promise<void> {
-  const config = loadConfig();
+  // Read-only until setup creates the state folder (an uninstall that deleted it stays done).
+  const fresh = !fs.existsSync(paths.stateDir);
+  const config = fresh ? loadConfigDefaults() : loadConfig();
   const program = installedProgram();
-  const health = await serviceHealth(socketPath());
+  const ours = program === cliPath;
+  // Another copy's service (say, a clone the app is replacing) says nothing about this one's reader.
+  const health = ours ? await serviceHealth(socketPath()) : null;
   const status = readerStatus();
   const access = !health
     ? 'unknown'
@@ -367,13 +410,16 @@ async function statusJson(): Promise<void> {
           ? 'failed'
           : 'needed';
   if (access === 'ok') rememberGrantedReader();
-  const store = Store.open();
-  const items = { open: store.listItems({ status: ['open'] }).length, lastInterpretedAt: store.getMeta('last_interpreted_at') ?? null };
-  store.close();
+  let items = { open: 0, lastInterpretedAt: null as string | null };
+  if (!fresh) {
+    const store = Store.open();
+    items = { open: store.listItems({ status: ['open'] }).length, lastInterpretedAt: store.getMeta('last_interpreted_at') ?? null };
+    store.close();
+  }
   const out: Record<string, unknown> = {
     mode: appBundle ? 'app' : 'cli',
     version: version(),
-    install: { state: !program ? 'none' : program === cliPath ? 'this' : 'other', program, version: installedVersion() },
+    install: { state: !program ? 'none' : ours ? 'this' : 'other', program, version: installedVersion() },
     service: { running: Boolean(health) },
     reader: {
       path: readerApp(),
@@ -404,7 +450,9 @@ async function statusJson(): Promise<void> {
   if (flag('apps')) {
     out.apps = APPS.map((app) => {
       const installed = app.installed();
-      return { id: app.id, name: app.name, installed, connected: installed && app.registered() };
+      const connected = installed && app.connectedTo(cliPath);
+      // Connected, but to another copy: it needs reconnecting to this one.
+      return { id: app.id, name: app.name, installed, connected, elsewhere: installed && !connected && app.registered() };
     });
   }
   console.log(JSON.stringify(out, null, flag('json') ? undefined : 2));
@@ -515,7 +563,7 @@ const bootout = (file: string) => {
 };
 
 function installService(): void {
-  if (!fs.existsSync(readerBinary())) throw new Error('the reader is missing; run: node src/cli.ts setup');
+  if (!fs.existsSync(readerBinary())) throw new Error(`the reader is missing; ${appBundle ? 'download the app again' : 'run: node src/cli.ts setup'}`);
   const service = plist();
   // launchd runs these as you at every login, so nobody else may be able to change them.
   const env = /<key>IMESSAGE_AGENT_(?:CLAUDE|CODEX)_BIN<\/key><string>([^<]+)<\/string>/g;
@@ -527,6 +575,8 @@ function installService(): void {
     fs.writeFileSync(file, content);
     execFileSync('/bin/launchctl', ['bootstrap', `gui/${process.getuid!()}`, file]);
   }
+  // Only now that the new jobs are running: an install that failed before this kept the old ones.
+  removeOldReaders();
   console.log(`   Installed ${READER_LABEL} and ${LABEL} (logs: ${path.join(paths.stateDir, 'logs')})`);
 }
 
@@ -631,7 +681,9 @@ async function main(): Promise<void> {
     }
     case 'brief': {
       const store = Store.open();
-      console.log(buildBrief(store, { since: option('since'), includeLowConfidence: flag('all') }));
+      const since = option('since');
+      if (since !== undefined && Number.isNaN(Date.parse(since))) throw new Error('--since takes a date or time, e.g. 2026-10-01 or 2026-10-01T09:00');
+      console.log(buildBrief(store, { since, includeLowConfidence: flag('all') }));
       return store.close();
     }
     case 'items': {

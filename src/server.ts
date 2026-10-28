@@ -351,11 +351,18 @@ export async function serveSocket(opts: { autoInterpret?: boolean } = {}): Promi
   httpServer.on('close', () => fs.rmSync(sock, { force: true }));
   console.error(`Messages Agent service running on this Mac only (socket ${sock}, no network port)`);
 
-  if (opts.autoInterpret !== false && config.autoInterpretMinutes > 0) {
-    const intervalMs = config.autoInterpretMinutes * 60_000;
+  if (opts.autoInterpret !== false) {
+    // The interval is read on every tick, so changing it in Settings applies within minutes.
     const tick = () => {
+      let minutes: number;
+      try {
+        minutes = loadConfig().autoInterpretMinutes;
+      } catch (err: any) {
+        return console.error(`[interpret] ${new Date().toISOString()} skipped: ${err.message}`);
+      }
+      if (!(minutes > 0)) return;
       const last = withStore((s) => s.lastRun());
-      if (last && Date.now() - new Date(last.started_at).getTime() < intervalMs) return;
+      if (last && Date.now() - new Date(last.started_at).getTime() < minutes * 60_000) return;
       startInterpretation()
         .then((r) => console.error(`[interpret] ${new Date().toISOString()} ${JSON.stringify(r)}`))
         .catch((err) => console.error(`[interpret] ${new Date().toISOString()} failed: ${err.message}`));

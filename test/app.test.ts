@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { buildFixture } from './fixture.ts';
 
@@ -21,9 +21,16 @@ const reader = path.join(contents, 'Helpers/Messages Agent Reader.app');
 const plist = (file: string, key: string) => execFileSync('/usr/bin/plutil', ['-extract', key, 'raw', '-o', '-', file], { encoding: 'utf8' }).trim();
 const signature = (target: string) => spawnSync('/usr/bin/codesign', ['-dv', target], { encoding: 'utf8' }).stderr;
 
+/** Fake homes and state folders, removed after the tests. */
+const scratchDirs: string[] = [];
+after(() => {
+  for (const dir of scratchDirs) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 /** A fresh, empty home folder, so nothing touches the real one. */
 function fakeHome(): string {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'imessage-agent-home-'));
+  scratchDirs.push(home);
   fs.mkdirSync(path.join(home, 'Library/LaunchAgents'), { recursive: true });
   return home;
 }
@@ -128,6 +135,7 @@ test('the bundled service starts and answers MCP calls through the bridge', { sk
   // Unix socket paths are limited to 104 bytes, so the state folder gets a short path.
   fs.mkdirSync(path.join(root, 'test/.tmp'), { recursive: true });
   const state = fs.mkdtempSync(path.join(root, 'test/.tmp/s-'));
+  scratchDirs.push(state);
   const serve = spawn(node, [cli, 'serve', '--no-auto'], { env: env(home, { ...fixture, IMESSAGE_AGENT_STATE_DIR: state }), stdio: 'ignore' });
   try {
     const sock = path.join(state, 'mcp.sock');

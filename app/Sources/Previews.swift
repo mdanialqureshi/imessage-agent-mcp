@@ -27,7 +27,9 @@ enum Previews {
         }
         if name == "4-needs-access" {
           // The whole scroll content, to check every step.
-          snapshot(SetupView().environmentObject(model).frame(height: 1500), size: NSSize(width: 620, height: 1500), dark: dark, to: dir.appendingPathComponent("setup-\(name)-full\(suffix).png"))
+          let full = SetupView(unrolled: true).environmentObject(model)
+          let height = NSHostingView(rootView: full).fittingSize.height
+          snapshot(full, size: NSSize(width: 620, height: height), dark: dark, to: dir.appendingPathComponent("setup-\(name)-full\(suffix).png"))
         }
       }
     }
@@ -59,7 +61,7 @@ enum Previews {
      "interpreters":[{"name":"claude","ok":\(interpreterOK),"detail":"\(interpreterOK ? "signed in with a Claude plan" : "not installed")"},{"name":"codex","ok":false,"detail":"not installed"}],
      "apps":[{"id":"chatgpt","name":"ChatGPT desktop app & Codex (for Dot)","installed":true,"connected":\(connected)},
              {"id":"claude-desktop","name":"Claude desktop app","installed":true,"connected":\(connected)},
-             {"id":"claude-code","name":"Claude Code","installed":true,"connected":false},
+             {"id":"claude-code","name":"Claude Code","installed":true,"connected":false,"elsewhere":true},
              {"id":"cursor","name":"Cursor","installed":false,"connected":false}]}
     """
   }

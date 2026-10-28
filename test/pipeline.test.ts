@@ -650,8 +650,7 @@ test("a clone's reader is rebuilt only when needed, and never into a folder othe
   const apps = path.join(base, 'Applications');
   const app = path.join(apps, 'Messages Agent Reader.app');
   const stateDir = path.join(base, 'state');
-  // Every path is in the test folder, including the clone's reader the app mode removes.
-  const opts = { app, stateDir, inApp: false, cliReader: path.join(base, 'cli-reader.app'), legacyReader: path.join(base, 'imessage-agent-reader.app') };
+  const opts = { app, stateDir, inApp: false };
 
   assert.equal(installReader(source, opts), true, 'first install builds it');
   const cdhash = readerCdHash(app);
@@ -944,6 +943,19 @@ test('removing an old reader deletes only a reader this project built', async ()
   fs.symlinkSync(path.join(base, 'elsewhere'), path.join(base, 'LinkedApplications'));
   removeReaderBundle(path.join(base, 'LinkedApplications/target.app'));
   assert.ok(fs.existsSync(path.join(base, 'elsewhere/target.app')));
+
+  // Old readers go only once the new service runs: building or checking a reader leaves them.
+  const { installReader, removeOldReaders } = await import('../src/messages/mirror.ts');
+  const cliReader = path.join(apps, 'cli.app');
+  const legacyReader = path.join(apps, 'legacy.app');
+  bundle(cliReader, READER_INFO);
+  bundle(legacyReader, READER_INFO);
+  assert.throws(() => installReader('/nonexistent.c', { app: path.join(base, 'missing.app'), stateDir: path.join(base, 'state'), inApp: true }));
+  assert.ok(fs.existsSync(cliReader) && fs.existsSync(legacyReader), 'a failed install keeps the readers in use');
+  removeOldReaders({ stateDir: path.join(base, 'state'), inApp: false, cliReader, legacyReader });
+  assert.ok(fs.existsSync(cliReader) && !fs.existsSync(legacyReader), "a clone keeps its own reader");
+  removeOldReaders({ stateDir: path.join(base, 'state'), inApp: true, cliReader, legacyReader });
+  assert.ok(!fs.existsSync(cliReader), "the app removes the clone's");
 });
 
 test('the update check reads only well-formed, newer releases from this repo', async () => {

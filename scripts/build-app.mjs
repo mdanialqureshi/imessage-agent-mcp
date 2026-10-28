@@ -61,10 +61,20 @@ if (process.platform !== 'darwin') throw new Error('The Mac app can only be buil
 // Disk image dates are stored in local time; UTC keeps the builder's time zone out of them.
 process.env.TZ = 'UTC';
 
-const app = path.join(out, `${APP_NAME}.app`);
-const contents = path.join(app, 'Contents');
+// Everything is built in a work folder and moved into <out> only at the end, so a failed or
+// interrupted build leaves the previous one there.
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'imessage-agent-build-'));
-fs.rmSync(app, { recursive: true, force: true });
+const app = path.join(work, `${APP_NAME}.app`);
+const contents = path.join(app, 'Contents');
+/** Disk images this build has attached, detached if it's interrupted. */
+const attached = new Set();
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(signal, () => {
+    for (const device of attached) spawnSync('/usr/bin/hdiutil', ['detach', device, '-force'], { stdio: 'ignore' });
+    fs.rmSync(work, { recursive: true, force: true });
+    process.exit(130);
+  });
+}
 for (const dir of ['MacOS', 'Helpers', 'Resources/app']) fs.mkdirSync(path.join(contents, dir), { recursive: true });
 
 try {
@@ -167,20 +177,32 @@ try {
   run('/usr/bin/codesign', ['--force', '--sign', '-', '--options', 'runtime', '--identifier', APP_ID, app]);
   run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]);
 
+  const results = [app];
   if (!args.includes('--no-package')) {
     step('Packaging');
     const name = `${APP_NAME.replace(/ /g, '-')}-${version}`;
-    const dmg = path.join(out, `${name}.dmg`);
-    const zip = path.join(out, `${name}.zip`);
-    fs.rmSync(dmg, { force: true });
-    fs.rmSync(zip, { force: true });
+    const dmg = path.join(work, `${name}.dmg`);
+    const zip = path.join(work, `${name}.zip`);
     buildDmg(dmg);
     run('/usr/bin/ditto', ['-c', '-k', '--keepParent', app, zip]);
     const sums = [dmg, zip].map((f) => `${createHash('sha256').update(fs.readFileSync(f)).digest('hex')}  ${path.basename(f)}`);
-    fs.writeFileSync(path.join(out, 'SHA256SUMS.txt'), sums.join('\n') + '\n');
+    fs.writeFileSync(path.join(work, 'SHA256SUMS.txt'), sums.join('\n') + '\n');
     console.log(sums.join('\n'));
+    results.push(dmg, zip, path.join(work, 'SHA256SUMS.txt'));
   }
-  console.log(`Built ${app}`);
+  fs.mkdirSync(out, { recursive: true });
+  for (const file of results) {
+    const dest = path.join(out, path.basename(file));
+    fs.rmSync(dest, { recursive: true, force: true });
+    // ditto keeps the app's signature intact; a rename is enough on the same disk.
+    try {
+      fs.renameSync(file, dest);
+    } catch (err) {
+      if (err.code !== 'EXDEV') throw err;
+      run('/usr/bin/ditto', [file, dest]);
+    }
+  }
+  console.log(`Built ${path.join(out, `${APP_NAME}.app`)}`);
 } finally {
   fs.rmSync(work, { recursive: true, force: true });
 }
@@ -347,6 +369,7 @@ function attach(image, flags) {
   const device = entries.find((d) => /^\/dev\/disk\d+$/.test(d)) ?? entries.map((d) => /^(\/dev\/disk\d+)s\d+$/.exec(d)?.[1]).find(Boolean);
   const mount = strings('mount-point')[0];
   if (device && before.has(device)) throw new Error(`${path.basename(image)} was already mounted`);
+  if (device) attached.add(device);
   if (!device || !mount?.startsWith('/Volumes/')) {
     if (device) detach(device);
     throw new Error(`couldn't mount ${path.basename(image)}`);
@@ -358,6 +381,7 @@ function detach(device) {
   for (let attempt = 1; ; attempt++) {
     try {
       run('/usr/bin/hdiutil', ['detach', device, ...(attempt > 3 ? ['-force'] : [])]);
+      attached.delete(device);
       return;
     } catch (err) {
       if (attempt === 5) throw err;

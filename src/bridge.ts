@@ -1,11 +1,13 @@
 import http from 'node:http';
 import readline from 'node:readline';
 import { PassThrough } from 'node:stream';
+import { appBundle } from './config.ts';
 
 /** Shown to the agent (and in app logs) when the background service isn't reachable. */
-export const SERVICE_DOWN =
-  "Messages Agent's background service isn't running on this Mac. On the Mac, run `node src/cli.ts doctor` " +
-  'in the imessage-agent-mcp folder (or `node src/cli.ts setup` to reinstall it).';
+export const SERVICE_DOWN = appBundle
+  ? "Messages Agent's background service isn't running on this Mac. On the Mac, open Messages Agent and follow its setup window."
+  : "Messages Agent's background service isn't running on this Mac. On the Mac, run `node src/cli.ts doctor` " +
+    'in the imessage-agent-mcp folder (or `node src/cli.ts setup` to reinstall it).';
 
 /** Longest a request may take; `refresh` waits up to 45s for interpretation. */
 const REQUEST_TIMEOUT_MS = 120_000;
