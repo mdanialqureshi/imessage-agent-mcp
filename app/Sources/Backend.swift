@@ -206,7 +206,7 @@ enum Backend {
 struct Status: Decodable, Equatable {
   struct Install: Decodable, Equatable { let state: String; let program: String?; let version: String? }
   struct Service: Decodable, Equatable { let running: Bool }
-  struct Reader: Decodable, Equatable { let path: String; let valid: Bool; let access: String; let changedSinceGrant: Bool?; let messages: Int?; let contacts: Int? }
+  struct Reader: Decodable, Equatable { let path: String; let valid: Bool; let installed: Bool?; let access: String; let changedSinceGrant: Bool?; let messages: Int?; let contacts: Int? }
   struct Interpreter: Decodable, Equatable, Identifiable { let name: String; let ok: Bool; let detail: String; var id: String { name } }
   struct AppInfo: Decodable, Equatable, Identifiable {
     let id: String; let name: String; let installed: Bool; let connected: Bool

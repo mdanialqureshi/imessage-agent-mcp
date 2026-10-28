@@ -643,7 +643,7 @@ test("the service refreshes the reader's copy when it's stale, once for concurre
 });
 
 test("a clone's reader is rebuilt only when needed, and never into a folder others can change", { skip: process.platform !== 'darwin' && 'macOS only' }, async () => {
-  const { installReader, readerCdHash, readerBinary } = await import('../src/messages/mirror.ts');
+  const { installReader, readerCdHash, readerBinary, readerInstalled } = await import('../src/messages/mirror.ts');
   const source = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'helper', 'reader.c');
   const base = path.join(dir, 'install-reader');
   fs.rmSync(base, { recursive: true, force: true });
@@ -696,9 +696,17 @@ test("a clone's reader is rebuilt only when needed, and never into a folder othe
   assert.equal(installReader(source, inApp), true, 'copied out');
   assert.equal(readerCdHash(copy), cdhash);
   assert.equal(installReader(source, inApp), false, 'the same reader: kept, so Full Disk Access stays on');
+  assert.equal(readerInstalled(copy, app), true);
+  // A link in its place (even to the right reader) is replaced by a real copy: launchd would follow it.
+  fs.rmSync(copy, { recursive: true });
+  fs.symlinkSync(app, copy);
+  assert.equal(readerInstalled(copy, app), false);
+  assert.equal(installReader(source, inApp), true);
+  assert.ok(fs.lstatSync(copy).isDirectory() && readerInstalled(copy, app));
   const copied = fs.readFileSync(readerBinary(copy));
   copied[0x2000] ^= 0xff;
   fs.writeFileSync(readerBinary(copy), copied);
+  assert.equal(readerInstalled(copy, app), false, 'a changed copy is reported');
   assert.equal(installReader(source, inApp), true, 'a changed copy is replaced');
   assert.equal(readerCdHash(copy), cdhash);
   assert.throws(() => installReader(source, { ...inApp, shipped: path.join(base, 'missing.app') }), /missing or damaged/);

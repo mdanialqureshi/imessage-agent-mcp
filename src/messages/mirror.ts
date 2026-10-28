@@ -24,6 +24,19 @@ export const usingMirror = () => process.env.IMESSAGE_AGENT_MIRROR === '1';
 export const readerApp = () => path.join(os.homedir(), 'Applications', 'Messages Agent Reader.app');
 /** The reader the Mac app ships, inside it (null for a clone). */
 export const shippedReader = () => (appBundle ? path.join(appBundle, 'Contents/Helpers/Messages Agent Reader.app') : null);
+/** A real folder, not a link to one (codesign and launchd would follow a link). */
+const isRealDir = (p: string) => fs.lstatSync(p, { throwIfNoEntry: false })?.isDirectory() ?? false;
+
+/**
+ * Whether the installed reader is the one to run: in the app, exactly the reader it ships;
+ * for a clone, one whose signature is intact.
+ */
+export function readerInstalled(app = readerApp(), shipped = shippedReader()): boolean {
+  if (!isRealDir(app)) return false;
+  const have = readerCdHash(app);
+  return Boolean(have) && (!shipped || have === readerCdHash(shipped));
+}
+
 export const readerBinary = (app = readerApp()) => path.join(app, 'Contents/MacOS/imessage-agent-reader');
 
 /**
@@ -93,8 +106,9 @@ export const LEGACY_CLI_READER_APP = path.join(os.homedir(), 'Applications', 'im
  * Makes sure the reader is in place. The app copies out the one it ships; a clone compiles one
  * with Apple's Command Line Tools. Either happens only when the installed one isn't exactly
  * that reader: a new build has a new signature, so macOS asks for Full Disk Access again.
- * Returns true if it put one in place. Readers an earlier install used stay until the new
- * service is running (see removeOldReaders), so a failed install leaves the old one working.
+ * Returns true if it put one in place. The app and a clone share this place, so switching
+ * between them swaps the reader (and asks for access again); install-service checks the rest
+ * of what launchd will run first, so a failed check doesn't swap it.
  */
 export function installReader(
   source: string,
@@ -103,7 +117,7 @@ export function installReader(
   if (inApp) {
     const want = shipped && readerCdHash(shipped);
     if (!want) throw new Error('the reader inside Messages Agent.app is missing or damaged; download the app again');
-    if (readerCdHash(app) === want) return false;
+    if (isRealDir(app) && readerCdHash(app) === want) return false;
     return putInPlace(app, stateDir, (tmp) => {
       execFileSync('/usr/bin/ditto', ['--norsrc', '--noextattr', '--noacl', '--noqtn', shipped, tmp], { stdio: 'ignore' });
       if (readerCdHash(tmp) !== want) throw new Error("the reader copied from Messages Agent.app didn't verify");
@@ -112,7 +126,7 @@ export function installReader(
   const stamp = path.join(stateDir, 'reader.sha256'); // Outside the app: changing the app breaks its signature.
   const hash = createHash('sha256').update(fs.readFileSync(source)).update(JSON.stringify(READER_BUILD)).update(READER_INFO).digest('hex');
   const [built, cdhash] = fs.existsSync(stamp) ? fs.readFileSync(stamp, 'utf8').trim().split(' ') : [];
-  if (built === hash && cdhash && readerCdHash(app) === cdhash) return false;
+  if (built === hash && cdhash && isRealDir(app) && readerCdHash(app) === cdhash) return false;
   if (spawnSync('/usr/bin/xcode-select', ['-p'], { stdio: 'ignore' }).status !== 0) {
     throw new Error("its reader is built with Apple's Command Line Tools: run `xcode-select --install`, then setup again");
   }
@@ -126,12 +140,16 @@ export function installReader(
 
 /** Makes a reader in a private folder with `make`, then moves it to `app` in place of the old one. */
 function putInPlace(app: string, stateDir: string, make: (tmp: string) => void): true {
+  // Private, whatever it was before: the reader is checked here before it's moved into place.
   fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(stateDir, 0o700);
+  spawnSync('/bin/chmod', ['-N', stateDir], { stdio: 'ignore' });
   privateApplicationsDir(path.dirname(app));
   const tmp = path.join(stateDir, 'reader-build.app'); // Usually the same disk as ~/Applications, so the move is a rename.
   fs.rmSync(tmp, { recursive: true, force: true });
   try {
     make(tmp);
+    if (!isRealDir(tmp)) throw new Error("the new reader isn't a folder");
     // Only ever replaces a reader: anything else already there is left alone.
     removeReaderBundle(app);
     if (fs.existsSync(app) || fs.lstatSync(app, { throwIfNoEntry: false })) throw new Error(`${app} already exists and isn't this project's reader; move it away first`);

@@ -158,7 +158,7 @@ The app's Settings change the common ones. All of them are in `~/Library/Applica
 
 ## Uninstall
 
-**App:** Settings → **Uninstall…**, then quit Messages Agent and move it to the Trash.
+**App:** Settings → **Uninstall…**, then quit Messages Agent and move it to the Trash. Uninstall first: the reader lives in `~/Applications` (so macOS judges it on its own, not as part of the app), and trashing only the app leaves it and its background job behind.
 
 **Command line:**
 

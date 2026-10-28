@@ -345,16 +345,24 @@ struct AccessStep: View {
     let s = model.status
     let ok = s?.reader.access == "ok"
     Step(number: 3, title: "Let the reader see your messages",
-         subtitle: "Messages lives in a folder only apps with **Full Disk Access** can read. Only **Messages Agent Reader**, a tiny program inside this app, gets it, and it only copies Messages and Contacts for the service.",
+         subtitle: "Messages lives in a folder only apps with **Full Disk Access** can read. Only **Messages Agent Reader**, a tiny program that comes with this app, gets it, and it only copies Messages and Contacts for the service.",
          done: ok, symbol: "lock.shield") {
       if ok {
         Label("The service can read Messages (\(s?.reader.messages?.formatted() ?? "?") messages)", systemImage: "checkmark.circle.fill")
           .foregroundStyle(.green)
       } else if !(s?.serviceReady ?? false) {
         Text("Install the background service first.").font(.callout).foregroundStyle(.secondary)
+      } else if s?.reader.installed == false && s?.install.state == "this" {
+        // The copy in ~/Applications went missing or changed: put the app's own reader back.
+        Label("The reader in your Applications folder is missing or was changed.", systemImage: "exclamationmark.triangle.fill")
+          .foregroundStyle(.orange)
+          .font(.callout)
+        Button("Put the Reader Back") { Task { await model.installService() } }
+          .buttonStyle(.borderedProminent)
+          .disabled(model.busy != nil)
       } else {
         if s?.reader.changedSinceGrant ?? false {
-          Label("The reader changed since you gave it access, so macOS switched access off. If you just updated Messages Agent, give the new reader access. If you didn't, don't: download the app again instead.", systemImage: "exclamationmark.triangle.fill")
+          Label("The reader changed since you gave it access, so macOS switched access off. If you just updated Messages Agent, give the new reader access. If you didn't, don't: quit and reopen Messages Agent instead, which puts its own reader back.", systemImage: "exclamationmark.triangle.fill")
             .foregroundStyle(.orange)
             .font(.callout)
             .fixedSize(horizontal: false, vertical: true)
@@ -405,7 +413,7 @@ struct ReaderTile: View {
 
   /// The installed reader (outside the app), or the one the app ships until it's installed.
   static func url(_ s: Status?) -> URL {
-    if let p = s?.reader.path, FileManager.default.fileExists(atPath: p) { return URL(fileURLWithPath: p) }
+    if let p = s?.reader.path, s?.reader.installed != false, FileManager.default.fileExists(atPath: p) { return URL(fileURLWithPath: p) }
     return Backend.shippedReader
   }
 

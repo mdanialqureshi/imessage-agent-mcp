@@ -11,7 +11,7 @@ import { interpretNow } from './interpret/run.ts';
 import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
 import { Conversations } from './messages/conversations.ts';
-import { assertOnlyYoursToChange, CLI_READER_APP, installReader, LEGACY_CLI_READER_APP, READER_LABEL, removeOldReaders, removeReaderBundle, readerApp, readerBinary, readerCdHash, shippedReader, readerStatus, STALE_MS } from './messages/mirror.ts';
+import { assertOnlyYoursToChange, CLI_READER_APP, installReader, LEGACY_CLI_READER_APP, READER_LABEL, removeOldReaders, removeReaderBundle, readerApp, readerBinary, readerCdHash, readerInstalled, shippedReader, readerStatus, STALE_MS } from './messages/mirror.ts';
 import { APPS, which } from './apps.ts';
 import { bridge, callTool, type ServiceHealth, serviceHealth } from './bridge.ts';
 import { serveSocket, socketPath } from './server.ts';
@@ -424,6 +424,7 @@ async function statusJson(): Promise<void> {
     reader: {
       path: readerApp(),
       valid: Boolean(readerCdHash(shippedReader() ?? readerApp())), // In the app: the one it ships (it copies it out).
+      installed: readerInstalled(), // The copy launchd runs is exactly that reader.
       access,
       changedSinceGrant: access !== 'ok' && readerChangedSinceGrant(),
       ...(health?.canReadMessages ? { messages: health.messages, contacts: health.contacts } : {}),
@@ -575,6 +576,12 @@ function setServiceRunning(on: boolean): void {
   if (installedProgram() !== cliPath) return;
   const jobs = [[READER_LABEL, readerPlistPath], [LABEL, plistPath]];
   if (on) {
+    // Each time the app opens, its own reader goes back in place if the copy went missing or changed.
+    try {
+      buildReader();
+    } catch (err: any) {
+      console.error(err.message);
+    }
     for (const [label, file] of jobs) {
       launchctl('enable', `${domain()}/${label}`);
       try {
@@ -590,13 +597,19 @@ function setServiceRunning(on: boolean): void {
   for (const [, file] of jobs) bootout(file);
 }
 
-function installService(): void {
-  if (!fs.existsSync(readerBinary())) throw new Error(`the reader is missing; ${appBundle ? 'download the app again' : 'run: node src/cli.ts setup'}`);
+/** The service's launchd job, once everything it runs checks out (before the reader is touched). */
+function checkedService(): string {
   const service = plist();
   // launchd runs these as you at every login, so nobody else may be able to change them.
   const env = /<key>IMESSAGE_AGENT_(?:CLAUDE|CODEX)_BIN<\/key><string>([^<]+)<\/string>/g;
   const interpreters = [...service.matchAll(env)].map((m) => m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'));
-  for (const file of [process.execPath, cliPath, readerBinary(), ...interpreters]) assertOnlyYoursToChange(file);
+  for (const file of [process.execPath, cliPath, ...interpreters]) assertOnlyYoursToChange(file);
+  return service;
+}
+
+function installService(service = checkedService()): void {
+  if (!fs.existsSync(readerBinary())) throw new Error(`the reader is missing; ${appBundle ? 'open Messages Agent and install the service again' : 'run: node src/cli.ts setup'}`);
+  assertOnlyYoursToChange(readerBinary());
   fs.mkdirSync(path.dirname(plistPath), { recursive: true });
   for (const [label, file, content] of [[READER_LABEL, readerPlistPath, readerPlist()], [LABEL, plistPath, service]]) {
     bootout(file);
@@ -757,8 +770,9 @@ async function main(): Promise<void> {
     case 'use':
       return useInterpreter(rest[0]);
     case 'install-service': {
+      const service = checkedService();
       buildReader();
-      installService();
+      installService(service);
       // Done once it answers, so whoever ran this (the app) sees it running straight away.
       if (!(await waitForService(20_000))) throw new Error(`The service didn't start; see ${path.join(paths.stateDir, 'logs/service.log')}`);
       return;
