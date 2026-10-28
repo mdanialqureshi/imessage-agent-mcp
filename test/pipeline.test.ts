@@ -920,3 +920,28 @@ test('the ownership check refuses a path whose ".." hides where a link really le
   assert.throws(() => assertOnlyYoursToChange(path.join(base, 'bin/dotdot')), /path doesn't show/);
   assert.doesNotThrow(() => assertOnlyYoursToChange(path.join(base, 'bin/target')));
 });
+
+test('removing an old reader deletes only a reader this project built', async () => {
+  const { READER_INFO, removeReaderBundle } = await import('../src/messages/mirror.ts');
+  const base = path.join(dir, 'remove-reader');
+  fs.rmSync(base, { recursive: true, force: true });
+  const bundle = (p: string, info: string) => {
+    fs.mkdirSync(path.join(p, 'Contents'), { recursive: true });
+    fs.writeFileSync(path.join(p, 'Contents/Info.plist'), info);
+  };
+  const apps = path.join(base, 'Applications');
+  bundle(path.join(apps, 'ours.app'), READER_INFO);
+  bundle(path.join(apps, 'other.app'), READER_INFO.replace('com.imessage-agent-mcp.reader', 'com.example.other'));
+  removeReaderBundle(path.join(apps, 'ours.app'));
+  removeReaderBundle(path.join(apps, 'other.app'));
+  assert.ok(!fs.existsSync(path.join(apps, 'ours.app')));
+  assert.ok(fs.existsSync(path.join(apps, 'other.app')), 'another app with the same name is kept');
+  // A link in its place is unlinked, not followed; a linked folder isn't touched.
+  bundle(path.join(base, 'elsewhere/target.app'), READER_INFO);
+  fs.symlinkSync(path.join(base, 'elsewhere/target.app'), path.join(apps, 'linked.app'));
+  removeReaderBundle(path.join(apps, 'linked.app'));
+  assert.ok(!fs.existsSync(path.join(apps, 'linked.app')) && fs.existsSync(path.join(base, 'elsewhere/target.app')));
+  fs.symlinkSync(path.join(base, 'elsewhere'), path.join(base, 'LinkedApplications'));
+  removeReaderBundle(path.join(base, 'LinkedApplications/target.app'));
+  assert.ok(fs.existsSync(path.join(base, 'elsewhere/target.app')));
+});

@@ -9,13 +9,22 @@ struct SettingsView: View {
   @State private var confirmUninstall = false
   @State private var deleteData = false
   @State private var uninstalled = false
+  /// The interpreter just picked, shown right away while the switch runs.
+  @State private var choice: String?
 
   private static let intervals = [(0, "Only when an agent asks"), (30, "Every 30 minutes"), (60, "Every hour"), (120, "Every 2 hours"), (240, "Every 4 hours"), (480, "Every 8 hours")]
 
   var body: some View {
     Form {
       Section("Reading") {
-        Picker("Interpreter", selection: Binding(get: { model.status?.interpreter ?? "claude" }, set: { name in Task { await model.useInterpreter(name) } })) {
+        Picker("Interpreter", selection: Binding(get: { choice ?? model.status?.interpreter ?? "claude" }, set: { name in
+          guard name != (model.status?.interpreter ?? "claude") else { return }
+          choice = name
+          Task {
+            await model.useInterpreter(name)
+            choice = nil
+          }
+        })) {
           Text("Claude Code (Claude plan)").tag("claude")
           Text("Codex (ChatGPT plan)").tag("codex")
         }

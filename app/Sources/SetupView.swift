@@ -124,21 +124,32 @@ struct MoveFirst: View {
 
 struct InterpreterStep: View {
   @EnvironmentObject var model: Model
+  /// The choice just clicked, shown right away while the switch runs.
+  @State private var choice: String?
 
   var body: some View {
-    let active = model.status?.interpreter ?? "claude"
-    let current = model.interpreters.first { $0.name == active }
+    let active = choice ?? model.status?.interpreter ?? "claude"
+    let current = choice == nil ? model.interpreters.first { $0.name == active } : nil
     Step(number: 1, title: "Choose what reads your new messages", done: current?.ok ?? false) {
       Text("It uses your own Claude or ChatGPT subscription through its command-line tool, so there are no API keys or extra costs.")
         .foregroundStyle(.secondary)
-      Picker("", selection: Binding(get: { active }, set: { name in Task { await model.useInterpreter(name) } })) {
+      Picker("", selection: Binding(get: { active }, set: { name in
+        guard name != (model.status?.interpreter ?? "claude") else { return }
+        choice = name
+        Task {
+          await model.useInterpreter(name)
+          choice = nil
+        }
+      })) {
         Text("Claude Code (Claude plan)").tag("claude")
         Text("Codex (ChatGPT plan)").tag("codex")
       }
       .pickerStyle(.radioGroup)
       .labelsHidden()
       .disabled(model.busy != nil)
-      if let current {
+      if choice != nil {
+        HStack { ProgressView().controlSize(.small); Text(model.busy ?? "Switching…").foregroundStyle(.secondary) }
+      } else if let current {
         Label(current.ok ? current.detail : "\(current.name == "claude" ? "Claude Code" : "Codex"): \(current.detail)",
               systemImage: current.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
           .foregroundStyle(current.ok ? .green : .red)

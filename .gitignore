@@ -24,3 +24,7 @@ snapshot*/
 
 # Mac app builds
 dist/
+
+# Build outputs
+*.dmg
+*.zip

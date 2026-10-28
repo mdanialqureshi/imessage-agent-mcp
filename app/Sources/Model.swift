@@ -18,6 +18,9 @@ final class Model: ObservableObject {
   @Published private(set) var appHasFullDiskAccess = false
 
   private var refreshing = false
+  /// A refresh asked for while one was running (true if it should be a full one). It runs
+  /// next, so a status read before an action never has the last word.
+  private var queuedRefresh: Bool?
   private var timer: Timer?
 
   /// Status first, then the slower interpreter and app checks; then every minute.
@@ -32,9 +35,22 @@ final class Model: ObservableObject {
   }
 
   func refresh(full: Bool = false) async {
-    if refreshing { return }
+    if refreshing {
+      queuedRefresh = (queuedRefresh ?? false) || full
+      return
+    }
     refreshing = true
     defer { refreshing = false }
+    var full = full
+    while true {
+      await refreshOnce(full: full)
+      guard let next = queuedRefresh else { return }
+      queuedRefresh = nil
+      full = next
+    }
+  }
+
+  private func refreshOnce(full: Bool) async {
     appHasFullDiskAccess = Backend.appHasFullDiskAccess
     if appHasFullDiskAccess {
       problem = Backend.fullDiskAccessProblem
@@ -56,14 +72,16 @@ final class Model: ObservableObject {
     busy = label
     problem = nil
     let res = await Backend.run(args)
-    busy = nil
     if !res.ok { problem = res.reason }
-    await refresh(full: full)
+    // The quick status first, so the change shows right away; then the slower checks.
+    await refresh()
+    busy = nil
+    if full { await refresh(full: true) }
     return res.ok
   }
 
   func useInterpreter(_ name: String) async {
-    await act("Switching to \(name)…", ["use", name], full: true)
+    await act("Switching to \(name == "codex" ? "Codex" : "Claude Code")…", ["use", name], full: true)
   }
 
   func installService() async {

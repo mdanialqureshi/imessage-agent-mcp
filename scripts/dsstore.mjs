@@ -27,7 +27,10 @@ export function readDsStore(buf) {
     toc[name] = buf.readUInt32BE(p + 1 + len);
     p += 5 + len;
   }
-  const block = (id) => at(addresses[id] & ~0x1f);
+  const block = (id) => {
+    if (!Number.isInteger(id) || id >= count) throw new Error('.DS_Store refers to a block it lacks');
+    return at(addresses[id] & ~0x1f);
+  };
   if (toc.DSDB === undefined) throw new Error('.DS_Store has no DSDB');
   const rootNode = buf.readUInt32BE(block(toc.DSDB));
 
@@ -44,11 +47,15 @@ export function readDsStore(buf) {
     if (type === 'blob') size = 4 + buf.readUInt32BE(q);
     else if (type === 'ustr') size = 4 + buf.readUInt32BE(q) * 2;
     if (size === undefined) throw new Error(`.DS_Store record type ${type} isn't supported`);
+    if (records.length >= 10_000) throw new Error('.DS_Store has too many records');
     records.push({ name, code, type, value: Buffer.from(buf.subarray(q, q + size)) });
     return q + size;
   };
+  const seen = new Set();
   const readNode = (id, depth) => {
     if (depth > 16) throw new Error('.DS_Store tree is too deep');
+    if (seen.has(id)) throw new Error('.DS_Store tree has a loop');
+    seen.add(id);
     let q = block(id);
     const next = buf.readUInt32BE(q);
     const n = buf.readUInt32BE(q + 4);

@@ -10,7 +10,7 @@ import { interpretNow } from './interpret/run.ts';
 import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
 import { Conversations } from './messages/conversations.ts';
-import { assertOnlyYoursToChange, CLI_READER_APP, installReader, LEGACY_CLI_READER_APP, READER_LABEL, readerApp, readerBinary, readerCdHash, readerStatus, STALE_MS } from './messages/mirror.ts';
+import { assertOnlyYoursToChange, CLI_READER_APP, installReader, LEGACY_CLI_READER_APP, READER_LABEL, removeReaderBundle, readerApp, readerBinary, readerCdHash, readerStatus, STALE_MS } from './messages/mirror.ts';
 import { APPS, which } from './apps.ts';
 import { bridge, callTool, type ServiceHealth, serviceHealth } from './bridge.ts';
 import { serveSocket, socketPath } from './server.ts';
@@ -540,7 +540,7 @@ function uninstallService(): void {
   }
   fs.rmSync(socketPath(), { force: true });
   for (const name of ['mirror', 'reader-status', 'reader-granted', 'reader.sha256', 'reader-build.app', 'bin']) fs.rmSync(path.join(paths.stateDir, name), { recursive: true, force: true });
-  for (const reader of [CLI_READER_APP, LEGACY_CLI_READER_APP]) fs.rmSync(reader, { recursive: true, force: true }); // The app's own reader goes when the app is deleted.
+  for (const reader of [CLI_READER_APP, LEGACY_CLI_READER_APP]) removeReaderBundle(reader); // The app's own reader goes when the app is deleted.
   console.log(`Removed the background service (${LABEL}), its reader and its copy of Messages.`);
 }
 

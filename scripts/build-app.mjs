@@ -33,7 +33,10 @@ const APP_NAME = 'Messages Agent';
 const DMG_VOLUME = 'Messages Agent';
 /** Alias record tags (Carbon's Alias Manager) that are safe to publish: names and paths inside the image. */
 const ALIAS_TAGS = new Set([0, 1, 2, 14, 15, 16, 17, 18]);
+const FOLDER_IDS_TAG = 1;
 const CARBON_PATH_TAG = 2;
+const VOLUME_DATE_TAG = 16;
+const FILE_DATE_TAG = 17;
 const VOLUME_NAME_TAG = 15;
 const MOUNT_POINT_TAG = 19;
 const DMG_LAYOUT = { window: { width: 640, height: 428 }, iconSize: 112, app: [170, 190], applications: [470, 190] };
@@ -238,21 +241,34 @@ end run`;
   } finally {
     detach(mounted.device);
   }
-  // The rest happens out of Finder's sight (-nobrowse), so it can't rewrite the layout again.
-  const hidden = attach(rw, ['-readwrite', '-noverify', '-noautoopen', '-nobrowse']);
+  // Finder's layout is read out of its sight (-nobrowse), and that filesystem is thrown away:
+  // its free space still holds Finder's original file, with where the build ran.
+  const hidden = attach(rw, ['-readonly', '-noverify', '-noautoopen', '-nobrowse']);
+  let finderLayout;
   try {
-    const store = path.join(hidden.mount, '.DS_Store');
-    fs.writeFileSync(store, cleanLayout(fs.readFileSync(store), layoutName));
-    // Added after Finder is done, since Finder removes it: the volume's icon in Finder and on the desktop.
-    fs.copyFileSync(path.join(contents, 'Resources/AppIcon.icns'), path.join(hidden.mount, '.VolumeIcon.icns'));
-    run('/usr/bin/SetFile', ['-a', 'C', hidden.mount]);
-    fs.rmSync(path.join(hidden.mount, '.fseventsd'), { recursive: true, force: true });
-    run('/usr/sbin/diskutil', ['rename', hidden.mount, DMG_VOLUME]);
-    run('/bin/sync');
+    finderLayout = fs.readFileSync(path.join(hidden.mount, '.DS_Store'));
   } finally {
     detach(hidden.device);
   }
-  run('/usr/bin/hdiutil', ['convert', rw, '-format', 'ULMO', '-o', dmg]);
+  fs.rmSync(rw);
+
+  // The image people download is a fresh filesystem that has only ever held these files.
+  fs.copyFileSync(path.join(contents, 'Resources/AppIcon.icns'), path.join(staging, '.VolumeIcon.icns'));
+  const fresh = path.join(work, 'fresh.dmg');
+  run('/usr/bin/hdiutil', ['create', '-volname', DMG_VOLUME, '-srcfolder', staging, '-fs', 'HFS+', '-format', 'UDRW', '-ov', fresh]);
+  const final = attach(fresh, ['-readwrite', '-noverify', '-noautoopen', '-nobrowse']);
+  try {
+    fs.writeFileSync(path.join(final.mount, '.DS_Store'), cleanLayout(finderLayout, layoutName, aliasTarget(final.mount)));
+    // The volume uses its .VolumeIcon.icns in Finder and on the desktop.
+    run('/usr/bin/SetFile', ['-a', 'C', final.mount]);
+    fs.rmSync(path.join(final.mount, '.fseventsd'), { recursive: true, force: true });
+    run('/bin/sync');
+  } finally {
+    detach(final.device);
+  }
+  // Every byte of it, free space included, is checked before it's compressed.
+  assertImageIsClean(fresh, layoutName);
+  run('/usr/bin/hdiutil', ['convert', fresh, '-format', 'ULMO', '-o', dmg]);
 
   // Check the result: the layout, the background and the app all made it in, and nothing about this Mac did.
   const check = attach(dmg, ['-readonly', '-nobrowse', '-noautoopen']);
@@ -262,6 +278,7 @@ end run`;
     }
     if (fs.readlinkSync(path.join(check.mount, 'Applications')) !== '/Applications') throw new Error('the disk image has no Applications link');
     assertLayoutIsClean(fs.readFileSync(path.join(check.mount, '.DS_Store')), layoutName);
+    if (!(fs.statSync(path.join(check.mount, '.background/background.tiff')).ino > 0)) throw new Error('the disk image has no background');
     run('/usr/bin/codesign', ['--verify', '--deep', '--strict', path.join(check.mount, `${APP_NAME}.app`)]);
   } finally {
     detach(check.device);
@@ -276,7 +293,8 @@ function attach(image, flags) {
     [...plist.matchAll(new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`, 'g'))].map((m) =>
       m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&'),
     );
-  const device = strings('dev-entry').filter((d) => /^\/dev\/disk\d+$/.test(d))[0];
+  const entries = strings('dev-entry');
+  const device = entries.find((d) => /^\/dev\/disk\d+$/.test(d)) ?? entries.map((d) => /^(\/dev\/disk\d+)s\d+$/.exec(d)?.[1]).find(Boolean);
   const mount = strings('mount-point')[0];
   if (!device || !mount?.startsWith('/Volumes/')) {
     if (device) detach(device);
@@ -323,9 +341,37 @@ function blob(data) {
  * path and this Mac's disk (tag 20) and where it happened to be mounted (tag 19, rewritten
  * to the volume's usual place).
  */
-function cleanAlias(alias, layoutName) {
+/**
+ * What the background alias must name on the image people download: the folder's and file's
+ * ids, and the volume's and file's creation dates (HFS+ keeps local time in the record's
+ * header and UTC in its extra fields).
+ */
+function aliasTarget(mount) {
+  const folder = path.join(mount, '.background');
+  const file = path.join(folder, 'background.tiff');
+  return { volume: fs.statSync(mount).birthtime, folder: fs.statSync(folder).ino, file: fs.statSync(file).ino, created: fs.statSync(file).birthtime };
+}
+
+/** Seconds since 1904, the HFS epoch. */
+function macSeconds(date) {
+  return Math.floor((date.getTime() - Date.UTC(1904, 0, 1)) / 1000);
+}
+function macLocalSeconds(date) {
+  return macSeconds(date) - date.getTimezoneOffset() * 60;
+}
+function highRes(date) {
+  const b = Buffer.alloc(8);
+  b.writeUIntBE(macSeconds(date), 0, 6); // Then 16 bits of fraction, left at zero.
+  return b;
+}
+
+function cleanAlias(alias, layoutName, target) {
   if (alias.readUInt16BE(6) !== 2) throw new Error('unexpected background alias version');
   const header = Buffer.from(alias.subarray(0, 150));
+  header.writeUInt32BE(macLocalSeconds(target.volume), 38);
+  header.writeUInt32BE(target.folder, 46);
+  header.writeUInt32BE(target.file, 114);
+  header.writeUInt32BE(macLocalSeconds(target.created), 118);
   // The volume's name, as it will be once renamed (a length byte, then up to 27 bytes).
   header.fill(0, 10, 38);
   header[10] = DMG_VOLUME.length;
@@ -350,6 +396,9 @@ function cleanAlias(alias, layoutName) {
       const name = Buffer.from(DMG_VOLUME, 'utf16le').swap16();
       data = Buffer.concat([Buffer.from([0, DMG_VOLUME.length]), name]);
     }
+    if (id === FOLDER_IDS_TAG) data = Buffer.from(Uint32Array.of(target.folder).buffer).reverse(); // Big-endian.
+    if (id === VOLUME_DATE_TAG) data = highRes(target.volume);
+    if (id === FILE_DATE_TAG) data = highRes(target.created);
     if (ALIAS_TAGS.has(id)) tag(id, data);
     if (id === MOUNT_POINT_TAG) tag(id, Buffer.from(`/Volumes/${DMG_VOLUME}`, 'utf8'));
     p += 4 + len + (len & 1);
@@ -361,7 +410,7 @@ function cleanAlias(alias, layoutName) {
 }
 
 /** Finder's .DS_Store reduced to the window settings, the icon positions and the background. */
-function cleanLayout(buf, layoutName) {
+function cleanLayout(buf, layoutName, target) {
   const records = readDsStore(buf);
   const icvp = records.find((r) => r.name === '.' && r.code === 'icvp');
   if (!icvp) throw new Error("Finder didn't save the window's view settings");
@@ -385,7 +434,7 @@ function cleanLayout(buf, layoutName) {
   };
   const kept = [
     { name: '.', code: 'bwsp', type: 'blob', value: blob(plistOf(browser)) },
-    { name: '.', code: 'icvp', type: 'blob', value: blob(plistOf(options, { backgroundImageAlias: cleanAlias(alias, layoutName) })) },
+    { name: '.', code: 'icvp', type: 'blob', value: blob(plistOf(options, { backgroundImageAlias: cleanAlias(alias, layoutName, target) })) },
     { name: '.', code: 'vSrn', type: 'long', value: Buffer.from([0, 0, 0, 1]) },
     ...records.filter((r) => r.code === 'Iloc' && [`${APP_NAME}.app`, 'Applications'].includes(r.name)),
   ];
@@ -398,9 +447,39 @@ function assertLayoutIsClean(buf, layoutName) {
   const allowed = new Set(['.:bwsp', '.:icvp', '.:vSrn', `${APP_NAME}.app:Iloc`, 'Applications:Iloc']);
   const extra = readDsStore(buf).filter((r) => !allowed.has(`${r.name}:${r.code}`));
   if (extra.length) throw new Error(`the disk image layout has unexpected records: ${extra.map((r) => `${r.name}:${r.code}`).join(', ')}`);
-  const text = buf.toString('latin1') + Buffer.from(buf).swap16().toString('utf16le');
-  const dataVolume = /Volume UUID:\s+([0-9A-F-]{36})/.exec(run('/usr/sbin/diskutil', ['info', '/System/Volumes/Data'], { encoding: 'utf8' }))?.[1];
-  const forbidden = ['/var/folders', ':var:folders', '/Users/', ':Users:', 'rw.dmg', 'imessage-agent-build', 'Macintosh HD', layoutName, os.userInfo().username, os.homedir(), dataVolume].filter(Boolean);
-  const found = forbidden.filter((s) => text.includes(s));
+  const found = traces(['/var/folders', ':var:folders', '/Users/', ':Users:', os.userInfo().username, ...machineTraces(layoutName)], buf);
   if (found.length) throw new Error(`the disk image layout mentions this Mac (${found.length} item(s)); not packaging it`);
+}
+
+/** Strings that would identify the Mac or account that built the image. */
+function machineTraces(layoutName) {
+  const dataVolume = /Volume UUID:\s+([0-9A-F-]{36})/.exec(run('/usr/sbin/diskutil', ['info', '/System/Volumes/Data'], { encoding: 'utf8' }))?.[1];
+  const tmp = fs.realpathSync(os.tmpdir());
+  return ['rw.dmg', 'imessage-agent-build', 'Macintosh HD', layoutName, os.homedir(), tmp, tmp.replace(/^\/private/, ''), dataVolume].filter(Boolean);
+}
+
+/** Which of these strings appear in buf, as plain text or UTF-16 in either byte order, at any offset. */
+function traces(strings, buf) {
+  return strings.filter((s) => [Buffer.from(s, 'latin1'), Buffer.from(s, 'utf16le'), Buffer.from(s, 'utf16le').swap16()].some((b) => buf.includes(b)));
+}
+
+/** Scans a raw image file (every block, used or free) for traces of this Mac. */
+function assertImageIsClean(image, layoutName) {
+  const strings = machineTraces(layoutName);
+  const overlap = 4096;
+  const fd = fs.openSync(image, 'r');
+  try {
+    const chunk = Buffer.alloc(16 << 20);
+    let carry = Buffer.alloc(0);
+    for (;;) {
+      const n = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (!n) break;
+      const window = Buffer.concat([carry, chunk.subarray(0, n)]);
+      const found = traces(strings, window);
+      if (found.length) throw new Error(`the disk image still holds ${found.length} trace(s) of this Mac; not packaging it`);
+      carry = Buffer.from(window.subarray(Math.max(0, window.length - overlap)));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
 }

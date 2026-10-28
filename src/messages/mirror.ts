@@ -98,10 +98,10 @@ export function installReader(
 ): boolean {
   // Where older versions kept it.
   fs.rmSync(path.join(stateDir, 'bin'), { recursive: true, force: true });
-  fs.rmSync(legacyReader, { recursive: true, force: true });
+  removeReaderBundle(legacyReader);
   if (inApp) {
     if (!readerCdHash(app)) throw new Error('the reader inside Messages Agent.app is missing or damaged; download the app again');
-    fs.rmSync(cliReader, { recursive: true, force: true });
+    removeReaderBundle(cliReader);
     return false;
   }
   const stamp = path.join(stateDir, 'reader.sha256'); // Outside the app: changing the app breaks its signature.
@@ -126,6 +126,22 @@ export function installReader(
     fs.rmSync(tmp, { recursive: true, force: true });
   }
   return true;
+}
+
+/**
+ * Deletes a reader this project built, and nothing else: a real app bundle with the reader's
+ * identifier, in a real folder of ours. A link in its place is only unlinked.
+ */
+export function removeReaderBundle(bundle: string): void {
+  const parent = fs.lstatSync(path.dirname(bundle), { throwIfNoEntry: false });
+  if (!parent?.isDirectory() || parent.uid !== process.getuid!()) return;
+  const st = fs.lstatSync(bundle, { throwIfNoEntry: false });
+  if (!st) return;
+  if (st.isSymbolicLink()) return fs.unlinkSync(bundle);
+  if (!st.isDirectory()) return;
+  const info = path.join(bundle, 'Contents/Info.plist');
+  const plist = fs.lstatSync(info, { throwIfNoEntry: false })?.isFile() ? fs.readFileSync(info, 'utf8') : '';
+  if (plist.includes(`<key>CFBundleIdentifier</key><string>${READER_LABEL}</string>`)) fs.rmSync(bundle, { recursive: true, force: true });
 }
 
 /** ~/Applications must be a real folder of ours that nobody else can write to. */
