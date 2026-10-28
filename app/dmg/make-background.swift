@@ -10,7 +10,7 @@ let size = NSSize(width: 640, height: 400)
 func render(scale: Int) -> Data {
   let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width) * scale, pixelsHigh: Int(size.height) * scale, bitsPerSample: 8,
                              samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
-  rep.size = size // Points, so the @2x image is 144 dpi.
+  rep.size = size // Points, so the 2x image is 144 dpi.
   NSGraphicsContext.saveGraphicsState()
   NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
   let ctx = NSGraphicsContext.current!.cgContext
