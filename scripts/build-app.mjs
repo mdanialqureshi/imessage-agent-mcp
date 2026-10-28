@@ -345,7 +345,7 @@ function previousReader(from, inputs) {
   if (prevApp.endsWith('.zip')) {
     const dir = path.join(work, 'previous');
     fs.mkdirSync(dir);
-    run('/usr/bin/ditto', ['-x', '-k', prevApp, dir]);
+    run('/usr/bin/ditto', ['-x', '-k', '--norsrc', '--noextattr', '--noacl', '--noqtn', prevApp, dir]);
     prevApp = path.join(dir, `${APP_NAME}.app`);
   }
   const stamp = path.join(prevApp, 'Contents/Resources/reader-inputs.sha256');

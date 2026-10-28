@@ -67,6 +67,17 @@ final class Model: ObservableObject {
   /// The copy kept while an update replaces the app; a leftover one (the app quit mid-update) goes on launch.
   private static let backupPrefix = ".Messages Agent previous "
 
+  /// Moves a hidden backup to a name you can see (never over anything already there).
+  @discardableResult
+  private func keepVisible(_ backup: URL) -> URL? {
+    let folder = backup.deletingLastPathComponent()
+    for n in 1...50 {
+      let url = folder.appendingPathComponent(n == 1 ? "Messages Agent (previous version).app" : "Messages Agent (previous version \(n)).app")
+      if (try? FileManager.default.moveItem(at: backup, to: url)) != nil { return url }
+    }
+    return nil
+  }
+
   private func removeLeftoverBackups() {
     // Only once this copy checks out: otherwise the backup may be the good one.
     guard Backend.verifiedCdHash(Backend.bundle) != nil else { return }
@@ -129,9 +140,16 @@ final class Model: ObservableObject {
     do {
       _ = try FileManager.default.replaceItemAt(current, withItemAt: staged, backupItemName: backupName, options: .withoutDeletingBackupItem)
     } catch {
-      // If it got as far as moving this copy aside, move it back.
-      if !FileManager.default.fileExists(atPath: current.path), FileManager.default.fileExists(atPath: backup.path) {
-        try? FileManager.default.moveItem(at: backup, to: current)
+      // If it got as far as moving this copy aside, move it back (or, if the new one is already in
+      // place but doesn't check out, put this one back over it).
+      let fm = FileManager.default
+      if fm.fileExists(atPath: backup.path) {
+        if !fm.fileExists(atPath: current.path) {
+          try? fm.moveItem(at: backup, to: current)
+        } else if Backend.verifiedCdHash(current) != got.cdhash {
+          _ = try? fm.replaceItemAt(current, withItemAt: backup)
+        }
+        if fm.fileExists(atPath: backup.path) { keepVisible(backup) }
       }
       problem = "Couldn't replace the app (\(error.localizedDescription)). Download it from GitHub instead."
       if let releasePage { NSWorkspace.shared.open(releasePage) }
@@ -144,10 +162,9 @@ final class Model: ObservableObject {
         problem = "The installed update didn't check out, so this version was put back."
       } else {
         // Keep the good copy where you can see it, rather than as a hidden backup.
-        let visible = current.deletingLastPathComponent().appendingPathComponent("Messages Agent (previous version).app")
-        let kept = FileManager.default.fileExists(atPath: backup.path) && (try? FileManager.default.moveItem(at: backup, to: visible)) != nil
-        problem = "The installed update didn't check out, and this version couldn't be put back"
-          + (kept ? " (it's in \(visible.deletingLastPathComponent().path) as \"\(visible.lastPathComponent)\")." : ".")
+        let kept = FileManager.default.fileExists(atPath: backup.path) ? keepVisible(backup) : nil
+        problem = "The installed update didn't check out"
+          + (kept.map { ". This version is in \($0.deletingLastPathComponent().path) as \"\($0.lastPathComponent)\"." } ?? ".")
           + " Download Messages Agent again from GitHub."
         if let releasePage { NSWorkspace.shared.open(releasePage) }
       }

@@ -160,7 +160,9 @@ export function checkZipListing(zip: Buffer, top: string): Map<string, boolean> 
       throw new Error(`the update has an unexpected file: ${JSON.stringify(name.slice(0, 200))}`);
     }
     if ((mode & 0o170000) === 0o120000) throw new Error(`the update has a link in it: ${JSON.stringify(name.slice(0, 200))}`);
-    listed.set(name.replace(/\/$/, ''), name.endsWith('/') || (mode & 0o170000) === 0o040000);
+    const key = name.replace(/\/$/, '');
+    if (listed.has(key)) throw new Error(`the update lists a file twice: ${JSON.stringify(key.slice(0, 200))}`);
+    listed.set(key, name.endsWith('/') || (mode & 0o170000) === 0o040000);
     p += 46 + nameLen + extraLen + commentLen;
   }
   if (p !== end) throw layout();
