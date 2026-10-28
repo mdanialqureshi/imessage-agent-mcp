@@ -142,7 +142,10 @@ function privateApplicationsDir(dir: string): void {
  */
 export function assertOnlyYoursToChange(file: string): void {
   // Every link on the way (its own folders decide who can repoint it) and where it all leads.
-  for (const p of pathsOnTheWay(file)) checkChain(p);
+  const way = pathsOnTheWay(file);
+  // A ".." right after a link means the kernel's answer differs from the text's; refuse rather than guess.
+  if (way.at(-1) !== fs.realpathSync.native(file)) throw new Error(`${file} leads somewhere its path doesn't show (a ".." after a link); point it straight at the program.`);
+  for (const p of way) checkChain(p);
 }
 
 /** Each link met while resolving file, one hop at a time, then the resolved path. */

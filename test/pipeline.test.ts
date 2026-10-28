@@ -904,3 +904,19 @@ test('the ownership check follows every link on the way, and reads access lists 
   assert.equal(validOp({ ...op, when_start: '2026-12-31T24:00' })!.when_start, null, 'no rolling into the next day');
   assert.equal(validOp({ ...op, when_start: '2026-12-31T23:59' })!.when_start, '2026-12-31T23:59');
 });
+
+test('the ownership check refuses a path whose ".." hides where a link really leads', { skip: process.platform !== 'darwin' && 'macOS only' }, async () => {
+  const { assertOnlyYoursToChange } = await import('../src/messages/mirror.ts');
+  const base = path.join(dir, 'trust4');
+  fs.rmSync(base, { recursive: true, force: true });
+  fs.mkdirSync(path.join(base, 'bin'), { recursive: true });
+  fs.mkdirSync(path.join(base, 'shared/a/b'), { recursive: true });
+  for (const d of [base, path.join(base, 'bin'), path.join(base, 'shared'), path.join(base, 'shared/a'), path.join(base, 'shared/a/b')]) fs.chmodSync(d, 0o755);
+  fs.writeFileSync(path.join(base, 'bin/target'), '', { mode: 0o755 });
+  fs.writeFileSync(path.join(base, 'shared/a/target'), '', { mode: 0o755 });
+  fs.symlinkSync(path.join(base, 'shared/a/b'), path.join(base, 'bin/evil'));
+  // As text this is bin/target; the kernel follows evil first and reaches shared/a/target.
+  fs.symlinkSync('evil/../target', path.join(base, 'bin/dotdot'));
+  assert.throws(() => assertOnlyYoursToChange(path.join(base, 'bin/dotdot')), /path doesn't show/);
+  assert.doesNotThrow(() => assertOnlyYoursToChange(path.join(base, 'bin/target')));
+});
