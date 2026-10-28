@@ -138,6 +138,7 @@ final class Model: ObservableObject {
       problem = "Couldn't download the update: \(res.reason)"
       return
     }
+    busy = "Installing Messages Agent \(latest)…"
     // Checked again here, on the exact bundle about to be installed: the CLI's check ran a
     // moment ago, in a folder other programs running as you could reach.
     let staged = URL(fileURLWithPath: got.app).standardizedFileURL
@@ -200,6 +201,7 @@ final class Model: ObservableObject {
           // Stay open (and keep owning the service) rather than quit with nothing to take over.
           Backend.keepServiceOnQuit = false
           Model.shared.problem = "The update is installed, but it couldn't reopen. Quit Messages Agent and open it again."
+          Model.shared.update = nil // It's installed; the next launch is the new version.
           Model.shared.busy = nil
           Model.shared.endTurn()
           return
