@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// Messages Agent: a menu bar app that sets up and watches the local background service.
-/// Quitting it doesn't stop the service; launchd keeps that running.
+/// Messages Agent: a menu bar app that sets up and runs the local background service. The
+/// service runs while the app is open: quitting stops it, opening starts it again.
 @main
 enum Main {
   static func main() {
@@ -52,7 +52,7 @@ struct MenuLabel: View {
   @State private var started = false
 
   var body: some View {
-    Image(systemName: model.needsAttention ? "exclamationmark.bubble" : "text.bubble")
+    Image(nsImage: MenuIcon.image(attention: model.needsAttention))
       .onAppear {
         guard !started else { return }
         started = true
@@ -99,12 +99,55 @@ struct MenuContent: View {
       }
     }
     Divider()
-    Button("Quit (the background service keeps running)") { NSApp.terminate(nil) }
+    Button("Quit Messages Agent") { NSApp.terminate(nil) }
+      .keyboardShortcut("q")
   }
 
   private func open(_ id: String) {
     openWindow(id: id)
     NSApp.activate(ignoringOtherApps: true)
+  }
+}
+
+/// The menu bar icon: a message bubble with the app icon's robot face, drawn as a template so
+/// it takes the menu bar's color. Needing attention adds a small dot.
+enum MenuIcon {
+  static func image(attention: Bool) -> NSImage {
+    let image = NSImage(size: NSSize(width: 20, height: 18), flipped: false) { _ in
+      // The bubble, with a short tail at the bottom left.
+      let bubble = NSBezierPath(roundedRect: NSRect(x: 2, y: 4.5, width: 15, height: 11.5), xRadius: 4.2, yRadius: 4.2)
+      let tail = NSBezierPath()
+      tail.move(to: NSPoint(x: 4.6, y: 5.2))
+      tail.line(to: NSPoint(x: 3.2, y: 1.6))
+      tail.line(to: NSPoint(x: 8.2, y: 4.6))
+      tail.close()
+      NSColor.black.setFill()
+      bubble.fill()
+      tail.fill()
+      // The robot's face, cut out of the bubble: two square-ish eyes and a smile.
+      NSGraphicsContext.current?.compositingOperation = .destinationOut
+      NSBezierPath(roundedRect: NSRect(x: 5.9, y: 9.4, width: 2.6, height: 2.6), xRadius: 0.7, yRadius: 0.7).fill()
+      NSBezierPath(roundedRect: NSRect(x: 10.5, y: 9.4, width: 2.6, height: 2.6), xRadius: 0.7, yRadius: 0.7).fill()
+      NSGraphicsContext.current?.compositingOperation = .sourceOver
+      let smile = NSBezierPath()
+      smile.move(to: NSPoint(x: 7.2, y: 7.6))
+      smile.curve(to: NSPoint(x: 11.8, y: 7.6), controlPoint1: NSPoint(x: 8.4, y: 6.3), controlPoint2: NSPoint(x: 10.6, y: 6.3))
+      smile.lineWidth = 1.3
+      smile.lineCapStyle = .round
+      NSGraphicsContext.current?.compositingOperation = .destinationOut
+      smile.stroke()
+      NSGraphicsContext.current?.compositingOperation = .sourceOver
+      if attention {
+        // A ring of clear space, then the dot, at the top right.
+        NSGraphicsContext.current?.compositingOperation = .destinationOut
+        NSBezierPath(ovalIn: NSRect(x: 13.2, y: 11.2, width: 7, height: 7)).fill()
+        NSGraphicsContext.current?.compositingOperation = .sourceOver
+        NSBezierPath(ovalIn: NSRect(x: 14.4, y: 12.4, width: 4.6, height: 4.6)).fill()
+      }
+      return true
+    }
+    image.isTemplate = true
+    return image
   }
 }
 

@@ -61,7 +61,7 @@ struct SettingsView: View {
         Text("One name, number or email per line. Their chats are never read or sent anywhere.").foregroundStyle(.secondary)
       }
       Section("App") {
-        Toggle("Show in the menu bar at login", isOn: Binding(get: { model.openAtLogin }, set: { model.openAtLogin = $0 }))
+        Toggle("Open at login (keeps agents connected after a restart)", isOn: Binding(get: { model.openAtLogin }, set: { model.openAtLogin = $0 }))
         Toggle("Check for updates daily", isOn: Binding(
           get: { model.status?.config.checkForUpdates ?? true },
           set: { on in Task { await model.setConfig("checkForUpdates", on ? "true" : "false") } }

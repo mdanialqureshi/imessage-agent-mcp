@@ -162,6 +162,15 @@ test("the repo's test suite passes under the bundled Node", { skip }, () => {
   assert.match(res.stdout, /fail 0/);
 });
 
+test('starting or stopping the service does nothing unless this copy installed it', { skip }, () => {
+  const home = fakeHome();
+  for (const command of ['start-service', 'stop-service']) {
+    const res = runCli(home, [command]);
+    assert.equal(res.status, 0, res.stderr);
+    assert.deepEqual(fs.readdirSync(path.join(home, 'Library/LaunchAgents')), [], 'nothing installed');
+  }
+});
+
 test('an update is downloaded only from GitHub and installed only if it checks out', { skip }, async () => {
   const { downloadUpdate } = await import('../src/update.ts');
   const version = plist(path.join(contents, 'Info.plist'), 'CFBundleShortVersionString');

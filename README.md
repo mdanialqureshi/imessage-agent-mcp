@@ -55,7 +55,7 @@ You need macOS 13 or newer with Messages in iCloud, and [Claude Code](https://cl
 
 **Try it:** click the menu bar icon, open the brief and click **Check New Messages Now**. The first run reads the past week, so it takes a few minutes. Then ask your agent *"What do I owe people this week?"*
 
-The app lives in your menu bar, where you can see what needs attention, open the **Overview** (every step on one page) and change settings. Quitting it doesn't stop the background service.
+The app lives in your menu bar, where you can see what needs attention, open the **Overview** (every step on one page) and change settings. The background service runs while the app is open: quitting Messages Agent stops it, and opening it starts it again. To keep agents connected after a restart, turn on **Open at login** in Settings.
 
 **Updating:** when there's a new version, the menu bar shows **Install Update**. Click it, and the app downloads it from this repo's Releases, checks it (its checksum, signature, identity and version), replaces itself, restarts the background service and reopens. Or click **Check Now** in Settings. Releases keep the same reader unless the reader itself changed, so Full Disk Access usually stays on; when it did change, the setup window asks you to switch it on for the new one.
 
@@ -101,7 +101,7 @@ If the reader was rebuilt, `doctor` shows ❌ Full Disk Access: add it again and
 
 ## Connect your agents
 
-Restart the desktop apps after connecting them. Agents on your phone can reach your Mac only while it's on and awake, with the app running.
+Restart the desktop apps after connecting them. Agents on your phone can reach your Mac only while it's on and awake, with Messages Agent open (from the command line, the service runs on its own).
 
 - **Dot:** in the ChatGPT desktop app, open your Dot's profile → **Computers** → **Allow access**. Then tell your Dot: *"For my texts, use the imessage tools on my Mac. If they aren't in your tool list, run `<call command>` to list them and `<call command> <tool> '<json args>'` to use one."* The app's setup window has this message ready to copy, with the real command; from the command line, `doctor` prints it. If Dot asks for approval, approve only that command.
 - **Claude desktop:** ask *"Use the imessage tools: what do I owe people?"*

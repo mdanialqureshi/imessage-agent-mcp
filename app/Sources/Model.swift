@@ -41,8 +41,13 @@ final class Model: ObservableObject {
     // Run from the disk image or a quarantined copy, it only asks to be moved: nothing it
     // started from there could keep working.
     guard !Backend.mustMove else { return }
-    NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { _ in Backend.stopAll() }
+    NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { _ in
+      Backend.stopAll()
+      Backend.stopServiceForQuit()
+    }
     Task {
+      // The service runs while the app is open: start it (if it's installed from this copy).
+      _ = await Backend.run(["start-service"], timeout: 30)
       await refresh(full: true)
       await repairIfMoved()
       removeLeftoverBackups()
@@ -171,7 +176,9 @@ final class Model: ObservableObject {
       return
     }
     try? FileManager.default.removeItem(at: backup)
-    // The new copy restarts the background service when it opens (its version changed).
+    // The new copy restarts the background service when it opens (its version changed), so
+    // this one leaves it running as it quits.
+    Backend.keepServiceOnQuit = true
     let config = NSWorkspace.OpenConfiguration()
     config.createsNewApplicationInstance = true
     NSWorkspace.shared.openApplication(at: current, configuration: config) { _, _ in

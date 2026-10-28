@@ -562,6 +562,31 @@ const bootout = (file: string) => {
   }
 };
 
+const domain = () => `gui/${process.getuid!()}`;
+const launchctl = (...args: string[]) => execFileSync('/bin/launchctl', args, { stdio: 'ignore' });
+
+/**
+ * The Mac app's service runs while the app is open. `stop-service` (when it quits) stops both
+ * jobs and switches them off, so logging in doesn't start them either; `start-service` (when
+ * it opens) switches them on and starts them. Only for an install from this copy.
+ */
+function setServiceRunning(on: boolean): void {
+  if (installedProgram() !== cliPath) return;
+  for (const [label, file] of [[READER_LABEL, readerPlistPath], [LABEL, plistPath]]) {
+    if (on) {
+      launchctl('enable', `${domain()}/${label}`);
+      try {
+        launchctl('bootstrap', domain(), file);
+      } catch {
+        // Already running.
+      }
+    } else {
+      bootout(file);
+      launchctl('disable', `${domain()}/${label}`);
+    }
+  }
+}
+
 function installService(): void {
   if (!fs.existsSync(readerBinary())) throw new Error(`the reader is missing; ${appBundle ? 'download the app again' : 'run: node src/cli.ts setup'}`);
   const service = plist();
@@ -570,10 +595,11 @@ function installService(): void {
   const interpreters = [...service.matchAll(env)].map((m) => m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'));
   for (const file of [process.execPath, cliPath, readerBinary(), ...interpreters]) assertOnlyYoursToChange(file);
   fs.mkdirSync(path.dirname(plistPath), { recursive: true });
-  for (const [file, content] of [[readerPlistPath, readerPlist()], [plistPath, service]]) {
+  for (const [label, file, content] of [[READER_LABEL, readerPlistPath, readerPlist()], [LABEL, plistPath, service]]) {
     bootout(file);
     fs.writeFileSync(file, content);
-    execFileSync('/bin/launchctl', ['bootstrap', `gui/${process.getuid!()}`, file]);
+    launchctl('enable', `${domain()}/${label}`); // In case the app switched it off when it last quit.
+    execFileSync('/bin/launchctl', ['bootstrap', domain(), file]);
   }
   // Only now that the new jobs are running: an install that failed before this kept the old ones.
   removeOldReaders();
@@ -597,9 +623,14 @@ const CHANGED_READER =
 
 /** Also deletes the reader and its copy of Messages, which setup recreates. */
 function uninstallService(): void {
-  for (const file of [plistPath, readerPlistPath]) {
+  for (const [label, file] of [[LABEL, plistPath], [READER_LABEL, readerPlistPath]]) {
     bootout(file);
     fs.rmSync(file, { force: true });
+    try {
+      launchctl('enable', `${domain()}/${label}`); // Leaves no "switched off" record behind.
+    } catch {
+      // Nothing recorded.
+    }
   }
   fs.rmSync(socketPath(), { force: true });
   for (const name of ['mirror', 'reader-status', 'reader-granted', 'reader.sha256', 'reader-build.app', 'bin']) fs.rmSync(path.join(paths.stateDir, name), { recursive: true, force: true });
@@ -727,6 +758,9 @@ async function main(): Promise<void> {
       return installService();
     case 'uninstall-service':
       return uninstallService();
+    case 'start-service':
+    case 'stop-service':
+      return setServiceRunning(command === 'start-service');
     case 'status':
       return statusJson();
     case 'connect-app':
@@ -767,6 +801,9 @@ Plumbing
   serve [--no-auto]    The background service (what launchd runs)
   install-service | uninstall-service
                        Just the launchd service
+  start-service | stop-service
+                       Start or stop (and switch off) the installed service; the Mac app runs
+                       these when it opens and quits
   status [--json] [--interpreters] [--apps]
                        Machine-readable status (what the Mac app shows)
   interpret [--dry-run] [--interpreter claude|codex]

@@ -39,6 +39,28 @@ enum Previews {
         }
       }
     }
+    // The menu bar icon, 8x, on a light and a dark bar.
+    for attention in [false, true] {
+      for dark in [false, true] {
+        let icon = MenuIcon.image(attention: attention)
+        let size = NSSize(width: 20 * 8, height: 18 * 8)
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width), pixelsHigh: Int(size.height), bitsPerSample: 8, samplesPerPixel: 4,
+                                   hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        (dark ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 0.93, alpha: 1)).setFill()
+        NSRect(origin: .zero, size: size).fill()
+        let tinted = NSImage(size: icon.size, flipped: false) { r in
+          icon.draw(in: r)
+          (dark ? NSColor.white : NSColor.black).set()
+          r.fill(using: .sourceAtop)
+          return true
+        }
+        tinted.draw(in: NSRect(origin: .zero, size: size))
+        NSGraphicsContext.restoreGraphicsState()
+        try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("menu-icon\(attention ? "-attention" : "")\(dark ? "-dark" : "").png"))
+      }
+    }
     print("rendered previews to \(dir.path)")
     exit(0)
   }

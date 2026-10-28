@@ -300,7 +300,7 @@ struct ServiceStep: View {
     let s = model.status
     let interpreterOK = model.interpreters.first { $0.name == s?.interpreter }?.ok ?? false
     Step(number: 2, title: "Install the background service",
-         subtitle: "It runs at login, listens only on a private socket on this Mac, and checks for new messages every \(s.map { Self.interval($0.config.autoInterpretMinutes) } ?? "2 hours").",
+         subtitle: "It runs while Messages Agent is open, listens only on a private socket on this Mac, and checks for new messages every \(s.map { Self.interval($0.config.autoInterpretMinutes) } ?? "2 hours").",
          done: s?.serviceReady ?? false, symbol: "gearshape.2") {
       if let s, s.serviceReady {
         Label("Running", systemImage: "checkmark.circle.fill").foregroundStyle(.green)

@@ -92,6 +92,16 @@ enum Backend {
     running[p.processIdentifier] = on ? p : nil
   }
 
+  /// Set while an update relaunches the app, so quitting the old copy leaves the service to the new one.
+  nonisolated(unsafe) static var keepServiceOnQuit = false
+
+  /// When the app quits: stops the background service and its reader (opening the app starts
+  /// them again), unless an update is relaunching it.
+  static func stopServiceForQuit() {
+    guard !keepServiceOnQuit, !mustMove, !appHasFullDiskAccess else { return }
+    _ = run(node, [cli.path, "stop-service"], env: environment(), timeout: 15, quiet: true)
+  }
+
   /// When the app quits: stops everything it started (each in its own process group).
   static func stopAll() {
     lock.lock()

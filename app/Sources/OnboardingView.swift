@@ -236,7 +236,7 @@ private struct AllSet: View {
       Text("You're all set")
         .font(.system(size: 30, weight: .bold))
         .tracking(-0.5)
-      Text("Messages Agent keeps working in the background, even after you close this window.")
+      Text("Messages Agent keeps working while it's open, even after you close this window. Quitting it stops everything.")
         .font(.system(size: 14))
         .foregroundStyle(.secondary)
         .multilineTextAlignment(.center)
@@ -244,7 +244,7 @@ private struct AllSet: View {
         .padding(.top, 8)
       VStack(alignment: .leading, spacing: 18) {
         Feature(symbol: "arrow.clockwise", title: "Restart your AI apps", text: "Claude and ChatGPT load the new connection when they restart.")
-        Feature(symbol: "menubar.rectangle", title: "Find it in the menu bar", text: "The brief, the overview of every step, and Settings are all there.")
+        Feature(symbol: "menubar.rectangle", title: "Find it in the menu bar", text: "The brief, the overview and Settings are there. Turn on Open at Login in Settings so agents can still reach your texts after a restart.")
         Feature(symbol: "text.bubble", title: "Ask away", text: "Try: \"What did I commit to in my texts this week?\"")
       }
       .frame(maxWidth: 420, alignment: .leading)
