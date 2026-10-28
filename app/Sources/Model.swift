@@ -16,6 +16,12 @@ final class Model: ObservableObject {
   @Published var problem: String?
   @Published private(set) var brief = ""
   @Published private(set) var appHasFullDiskAccess = false
+  /// A newer release on GitHub, from the daily check (or "Check for Updates…").
+  @Published private(set) var update: Update?
+  /// What the last update check found, for Settings: "Up to date", or why it failed.
+  @Published private(set) var updateNote: String?
+
+  struct Update: Decodable, Equatable { let current: String; let latest: String?; let url: String? }
 
   private var refreshing = false
   /// A refresh asked for while one was running (true if it should be a full one). It runs
@@ -28,9 +34,67 @@ final class Model: ObservableObject {
     Task {
       await refresh(full: true)
       await repairIfMoved()
+      await restartServiceIfUpdated()
+      await checkForUpdates(manual: false)
     }
     timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
-      Task { @MainActor in await Model.shared.refresh() }
+      Task { @MainActor in
+        await Model.shared.refresh()
+        await Model.shared.checkForUpdates(manual: false)
+      }
+    }
+  }
+
+  /// After the app is replaced by a newer one, the service is still running the old code: restart it.
+  private func restartServiceIfUpdated() async {
+    guard let s = status, s.install.state == "this", s.install.version != s.version, !Backend.mustMove else { return }
+    await act("Updating the background service…", ["install-service"])
+  }
+
+  private static let lastUpdateCheck = "lastUpdateCheck"
+
+  /// Once a day (if allowed in Settings), or now when asked: is there a newer release?
+  func checkForUpdates(manual: Bool) async {
+    if !manual {
+      guard status?.config.checkForUpdates ?? true, !Backend.mustMove else { return }
+      let last = UserDefaults.standard.double(forKey: Self.lastUpdateCheck)
+      guard Date().timeIntervalSince1970 - last > 24 * 3600 else { return }
+    }
+    UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastUpdateCheck)
+    let res = await Backend.run(["update", "--check"], timeout: 60)
+    guard res.ok, let data = res.out.data(using: .utf8), let found = try? JSONDecoder().decode(Update.self, from: data) else {
+      if manual { updateNote = "Couldn't check for updates: \(res.reason)" }
+      return
+    }
+    update = found.latest == nil ? nil : found
+    updateNote = found.latest.map { "Version \($0) is available." } ?? "Messages Agent is up to date."
+  }
+
+  /// Downloads and checks the new version, puts it in place of this app, and reopens it.
+  func installUpdate() async {
+    guard let latest = update?.latest else { return }
+    busy = "Downloading Messages Agent \(latest)…"
+    problem = nil
+    defer { busy = nil }
+    let res = await Backend.run(["update", "--download"], timeout: 900)
+    struct Downloaded: Decodable { let version: String; let app: String }
+    guard res.ok, let data = res.out.data(using: .utf8), let got = try? JSONDecoder().decode(Downloaded.self, from: data) else {
+      problem = "Couldn't download the update: \(res.reason)"
+      return
+    }
+    let current = Backend.bundle
+    do {
+      _ = try FileManager.default.replaceItemAt(current, withItemAt: URL(fileURLWithPath: got.app))
+    } catch {
+      problem = "Couldn't replace the app (\(error.localizedDescription)). Download it from GitHub instead."
+      if let url = update?.url.flatMap(URL.init(string:)) { NSWorkspace.shared.open(url) }
+      return
+    }
+    // The new copy restarts the background service when it opens (its version changed).
+    let config = NSWorkspace.OpenConfiguration()
+    config.createsNewApplicationInstance = true
+    NSWorkspace.shared.openApplication(at: current, configuration: config) { _, _ in
+      DispatchQueue.main.async { NSApp.terminate(nil) }
     }
   }
 

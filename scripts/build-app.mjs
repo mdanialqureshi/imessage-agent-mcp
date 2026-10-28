@@ -2,7 +2,7 @@
 // Builds Messages Agent.app, the downloadable Mac app: a menu bar app (app/Sources) that
 // bundles Node, this project's source and a prebuilt reader, so nothing else needs installing.
 //
-//   node scripts/build-app.mjs [--out dist] [--arch universal|native] [--no-package]
+//   node scripts/build-app.mjs [--out dist] [--arch universal|native] [--no-package] [--reader-from <previous .zip or .app>]
 //
 // Writes <out>/Messages Agent.app and, unless --no-package, a .dmg, a .zip and SHA256SUMS.txt
 // for a GitHub release. Needs macOS with Apple's Command Line Tools (Swift and clang), and
@@ -10,13 +10,13 @@
 //
 // The app is ad-hoc signed (no Apple Developer account), so people opening a download confirm
 // it once in System Settings → Privacy & Security → Open Anyway.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { compileReader } from '../src/messages/mirror.ts';
+import { compileReader, READER_BUILD, READER_INFO } from '../src/messages/mirror.ts';
 import { readDsStore, writeDsStore } from './dsstore.mjs';
 
 /** Node bundled into the app: an LTS release, pinned by the checksums nodejs.org publishes. */
@@ -58,6 +58,8 @@ const run = (cmd, argv, opts = {}) => execFileSync(cmd, argv, { stdio: [opts.inp
 const step = (text) => console.log(`• ${text}`);
 
 if (process.platform !== 'darwin') throw new Error('The Mac app can only be built on macOS.');
+// Disk image dates are stored in local time; UTC keeps the builder's time zone out of them.
+process.env.TZ = 'UTC';
 
 const app = path.join(out, `${APP_NAME}.app`);
 const contents = path.join(app, 'Contents');
@@ -101,7 +103,26 @@ try {
   run('/usr/bin/iconutil', ['-c', 'icns', path.join(work, 'AppIcon.iconset'), '-o', path.join(contents, 'Resources/AppIcon.icns')]);
 
   step('Reader (the only part that gets Full Disk Access)');
-  compileReader(path.join(root, 'helper/reader.c'), path.join(contents, 'Helpers/Messages Agent Reader.app'), archs.flatMap((a) => ['-arch', a]), path.join(contents, 'Resources/AppIcon.icns'));
+  // macOS ties Full Disk Access to the reader's exact code, so a release reuses the previous
+  // release's reader when nothing that goes into it changed (a newer compiler on the build
+  // machine alone would otherwise make every update ask for access again).
+  const readerArgs = archs.flatMap((a) => ['-arch', a]);
+  const readerInputs = createHash('sha256')
+    .update(fs.readFileSync(path.join(root, 'helper/reader.c')))
+    .update(JSON.stringify(READER_BUILD))
+    .update(READER_INFO)
+    .update(JSON.stringify(readerArgs))
+    .update(fs.readFileSync(path.join(root, 'app/icon/make-icon.swift')))
+    .digest('hex');
+  const readerDest = path.join(contents, 'Helpers/Messages Agent Reader.app');
+  const previous = opt('reader-from', null) && previousReader(opt('reader-from'), readerInputs);
+  if (previous) {
+    run('/usr/bin/ditto', [previous, readerDest]);
+    console.log('  reusing the previous release\'s reader (unchanged)');
+  } else {
+    compileReader(path.join(root, 'helper/reader.c'), path.join(contents, 'Helpers/Messages Agent Reader.app'), archs.flatMap((a) => ['-arch', a]), path.join(contents, 'Resources/AppIcon.icns'));
+  }
+  fs.writeFileSync(path.join(contents, 'Resources/reader-inputs.sha256'), readerInputs + '\n');
 
   step('Server source and its dependencies');
   const res = path.join(contents, 'Resources/app');
@@ -283,10 +304,39 @@ end run`;
   } finally {
     detach(check.device);
   }
+  // Checking it made hdiutil tag the file with this Mac's disk id (an extended attribute, not
+  // part of the file, but it travels with a local copy). Releases are uploaded from CI.
+  run('/usr/bin/xattr', ['-c', dmg]);
+}
+
+/**
+ * The reader inside a previous release (its .zip or .app), if it was built from the same
+ * inputs and is intact; otherwise null, and the reader is built fresh.
+ */
+function previousReader(from, inputs) {
+  let prevApp = path.resolve(from);
+  if (prevApp.endsWith('.zip')) {
+    const dir = path.join(work, 'previous');
+    fs.mkdirSync(dir);
+    run('/usr/bin/ditto', ['-x', '-k', prevApp, dir]);
+    prevApp = path.join(dir, `${APP_NAME}.app`);
+  }
+  const stamp = path.join(prevApp, 'Contents/Resources/reader-inputs.sha256');
+  if (!fs.existsSync(stamp) || fs.readFileSync(stamp, 'utf8').trim() !== inputs) return null;
+  const reader = path.join(prevApp, 'Contents/Helpers/Messages Agent Reader.app');
+  const sig = spawnSync('/usr/bin/codesign', ['-dv', reader], { encoding: 'utf8' }).stderr ?? '';
+  const ok =
+    spawnSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', reader]).status === 0 &&
+    /^Identifier=com\.imessage-agent-mcp\.reader$/m.test(sig) &&
+    /flags=0x\w+\([^)]*runtime/.test(sig);
+  if (!ok) throw new Error("the previous release's reader doesn't verify; not reusing it");
+  return reader;
 }
 
 /** Mounts a disk image, returning its mount point and its own device (what's detached later). */
 function attach(image, flags) {
+  // hdiutil hands back the existing mount for an image that's already attached; that one isn't ours to detach.
+  const before = new Set(run('/usr/bin/hdiutil', ['info'], { encoding: 'utf8' }).match(/\/dev\/disk\d+(?=\s)/g) ?? []);
   const plist = run('/usr/bin/hdiutil', ['attach', image, ...flags, '-plist'], { encoding: 'utf8' });
   // Its plist holds binary data too, so the two strings needed are read from the XML.
   const strings = (key) =>
@@ -296,6 +346,7 @@ function attach(image, flags) {
   const entries = strings('dev-entry');
   const device = entries.find((d) => /^\/dev\/disk\d+$/.test(d)) ?? entries.map((d) => /^(\/dev\/disk\d+)s\d+$/.exec(d)?.[1]).find(Boolean);
   const mount = strings('mount-point')[0];
+  if (device && before.has(device)) throw new Error(`${path.basename(image)} was already mounted`);
   if (!device || !mount?.startsWith('/Volumes/')) {
     if (device) detach(device);
     throw new Error(`couldn't mount ${path.basename(image)}`);
@@ -455,7 +506,10 @@ function assertLayoutIsClean(buf, layoutName) {
 function machineTraces(layoutName) {
   const dataVolume = /Volume UUID:\s+([0-9A-F-]{36})/.exec(run('/usr/sbin/diskutil', ['info', '/System/Volumes/Data'], { encoding: 'utf8' }))?.[1];
   const tmp = fs.realpathSync(os.tmpdir());
-  return ['rw.dmg', 'imessage-agent-build', 'Macintosh HD', layoutName, os.homedir(), tmp, tmp.replace(/^\/private/, ''), dataVolume].filter(Boolean);
+  const quiet = (cmd, argv) => spawnSync(cmd, argv, { encoding: 'utf8' }).stdout?.trim() || null;
+  const names = [quiet('/usr/sbin/scutil', ['--get', 'ComputerName']), quiet('/usr/sbin/scutil', ['--get', 'LocalHostName']), quiet('/usr/bin/id', ['-F'])];
+  return ['rw.dmg', 'fresh.dmg', 'imessage-agent-build', 'Macintosh HD', layoutName, os.homedir(), tmp, tmp.replace(/^\/private/, ''), dataVolume, dataVolume?.toLowerCase(), ...names]
+    .filter((s) => s && s.length >= 4);
 }
 
 /** Which of these strings appear in buf, as plain text or UTF-16 in either byte order, at any offset. */

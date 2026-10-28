@@ -10,6 +10,8 @@ This reads Messages (iMessage and SMS) read-only, understands the conversations,
 > - **New conversations**, sent through your own Claude or ChatGPT subscription to be interpreted.
 > - **Tool results** (the brief, items, and the messages you search or ask about), sent to the agent that asked, under that agent's own privacy terms.
 >
+> The Mac app also asks GitHub once a day whether there's a newer version. That request carries nothing about you or your messages, and Settings turns it off.
+>
 > Cloud agents like Dot reach your Mac only through the ChatGPT or Claude desktop app running on it. Details: [docs/security.md](docs/security.md).
 
 ## How it works
@@ -55,7 +57,7 @@ You need macOS 13 or newer with Messages in iCloud, and [Claude Code](https://cl
 
 The app lives in your menu bar, where you can see what needs attention and change settings. Quitting it doesn't stop the background service.
 
-**Updating:** replace the app in Applications with the new version and open it. The new reader is a new program to macOS, so the setup window asks you to switch on its Full Disk Access again.
+**Updating:** when there's a new version, the menu bar shows **Install Update**. Click it, and the app downloads it from this repo's Releases, checks it (its checksum, signature, identity and version), replaces itself, restarts the background service and reopens. Or click **Check Now** in Settings. Releases keep the same reader unless the reader itself changed, so Full Disk Access usually stays on; when it did change, the setup window asks you to switch it on for the new one.
 
 ### Option 2: from the command line
 
@@ -91,8 +93,8 @@ Then ask your agent *"What do I owe people this week?"*
 **Updating:**
 
 ```sh
-cd ~/imessage-agent-mcp && git pull && npm ci
-node src/cli.ts install-service    # restarts the service; rebuilds the reader only if it changed
+node src/cli.ts update --check    # is there anything new?
+node src/cli.ts update            # git pull, npm ci, then restart the service (rebuilds the reader only if it changed)
 ```
 
 If the reader was rebuilt, `doctor` shows ❌ Full Disk Access: add it again and remove the old entry.
@@ -144,6 +146,7 @@ The app's Settings change the common ones. All of them are in `~/Library/Applica
 | `contextMessages` | `25` | Earlier messages shown alongside new ones |
 | `privateContacts` | `[]` | Names, numbers or emails that are never read or sent anywhere |
 | `skipShortCodes` | `true` | Skip SMS short codes (banks, 2FA, deliveries) |
+| `checkForUpdates` | `true` | The Mac app checks GitHub for a newer version once a day |
 
 ## Limitations
 

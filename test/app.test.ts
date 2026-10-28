@@ -153,3 +153,46 @@ test("the repo's test suite passes under the bundled Node", { skip }, () => {
   assert.equal(res.status, 0, res.stdout.slice(-3000) + res.stderr.slice(-2000));
   assert.match(res.stdout, /fail 0/);
 });
+
+test('an update is downloaded only from GitHub and installed only if it checks out', { skip }, async () => {
+  const { downloadUpdate } = await import('../src/update.ts');
+  const version = plist(path.join(contents, 'Info.plist'), 'CFBundleShortVersionString');
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'imessage-agent-update-'));
+  const zipOf = (appDir: string) => {
+    const zip = path.join(scratch, `z-${Math.random().toString(36).slice(2)}.zip`);
+    execFileSync('/usr/bin/ditto', ['-c', '-k', '--keepParent', appDir, zip]);
+    return fs.readFileSync(zip);
+  };
+  const name = `Messages-Agent-${version}.zip`;
+  const base = `https://github.com/mdanialqureshi/imessage-agent-mcp/releases/download/v${version}/`;
+  const release = (zip: Buffer) => ({ version, url: '', zip: { name, url: base + name, size: zip.length }, sums: { url: base + 'SHA256SUMS.txt' } });
+  // A stand-in for GitHub: release files redirect to its asset host, like the real one.
+  const fakeGitHub = (zip: Buffer, sums: string, assetHost = 'objects.githubusercontent.com') => async (url: string) => {
+    const u = new URL(url);
+    if (u.hostname === 'github.com') return new Response(null, { status: 302, headers: { location: `https://${assetHost}/x/${path.basename(u.pathname)}` } });
+    return new Response(path.basename(u.pathname) === name ? zip : sums);
+  };
+  const sumsFor = (zip: Buffer) => `${createHash('sha256').update(zip).digest('hex')}  ${name}\n`;
+  const good = zipOf(app!);
+  const cacheDir = path.join(scratch, 'cache');
+
+  const staged = await downloadUpdate(release(good), fakeGitHub(good, sumsFor(good)) as typeof fetch, cacheDir);
+  assert.equal(path.basename(staged), 'Messages Agent.app');
+  assert.equal(spawnSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', staged]).status, 0);
+  assert.equal(fs.statSync(cacheDir).mode & 0o777, 0o700, 'staged privately');
+
+  // A download that doesn't match the release's checksums.
+  await assert.rejects(downloadUpdate(release(good), fakeGitHub(Buffer.concat([good, Buffer.from('x')]), sumsFor(good)) as typeof fetch, cacheDir), /checksum|larger/);
+  // Redirected anywhere but GitHub's own hosts.
+  await assert.rejects(downloadUpdate(release(good), fakeGitHub(good, sumsFor(good), 'evil.example.com') as typeof fetch, cacheDir), /refusing/);
+  // An altered app with a checksum that matches it (e.g. a replaced release file and its sums).
+  const altered = path.join(scratch, 'altered', 'Messages Agent.app');
+  fs.mkdirSync(path.dirname(altered));
+  execFileSync('/usr/bin/ditto', [app!, altered]);
+  fs.appendFileSync(path.join(altered, 'Contents/Resources/app/src/cli.ts'), '\n// changed\n');
+  const bad = zipOf(altered);
+  await assert.rejects(downloadUpdate(release(bad), fakeGitHub(bad, sumsFor(bad)) as typeof fetch, cacheDir), /signature/);
+  // A release whose app is a different version than it claims.
+  await assert.rejects(downloadUpdate({ ...release(good), version: '99.0.0' }, fakeGitHub(good, sumsFor(good)) as typeof fetch, cacheDir), /version/);
+  fs.rmSync(scratch, { recursive: true, force: true });
+});

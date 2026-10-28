@@ -29,6 +29,8 @@ export interface Config {
   privateContacts: string[];
   /** Skip chats with SMS short codes (banks, 2FA, deliveries). */
   skipShortCodes: boolean;
+  /** The Mac app checks this repo's GitHub Releases for a newer version once a day. */
+  checkForUpdates: boolean;
 }
 
 const defaults: Config = {
@@ -40,6 +42,7 @@ const defaults: Config = {
   autoInterpretMinutes: 120,
   privateContacts: [],
   skipShortCodes: true,
+  checkForUpdates: true,
 };
 
 const stateDir =

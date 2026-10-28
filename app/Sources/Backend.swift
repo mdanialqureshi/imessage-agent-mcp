@@ -144,13 +144,13 @@ enum Backend {
 
 /// What `cli.ts status --json` reports. Never contains message content.
 struct Status: Decodable, Equatable {
-  struct Install: Decodable, Equatable { let state: String; let program: String? }
+  struct Install: Decodable, Equatable { let state: String; let program: String?; let version: String? }
   struct Service: Decodable, Equatable { let running: Bool }
   struct Reader: Decodable, Equatable { let path: String; let valid: Bool; let access: String; let changedSinceGrant: Bool?; let messages: Int?; let contacts: Int? }
   struct Interpreter: Decodable, Equatable, Identifiable { let name: String; let ok: Bool; let detail: String; var id: String { name } }
   struct AppInfo: Decodable, Equatable, Identifiable { let id: String; let name: String; let installed: Bool; let connected: Bool }
   struct Items: Decodable, Equatable { let open: Int; let lastInterpretedAt: String? }
-  struct Config: Decodable, Equatable { let autoInterpretMinutes: Int; let firstRunLookbackDays: Int; let privateContacts: [String] }
+  struct Config: Decodable, Equatable { let autoInterpretMinutes: Int; let firstRunLookbackDays: Int; let privateContacts: [String]; let checkForUpdates: Bool? }
 
   let mode: String
   let version: String

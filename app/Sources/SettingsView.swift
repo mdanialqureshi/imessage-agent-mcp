@@ -60,9 +60,24 @@ struct SettingsView: View {
       }
       Section("App") {
         Toggle("Show in the menu bar at login", isOn: Binding(get: { model.openAtLogin }, set: { model.openAtLogin = $0 }))
+        Toggle("Check for updates daily", isOn: Binding(
+          get: { model.status?.config.checkForUpdates ?? true },
+          set: { on in Task { await model.setConfig("checkForUpdates", on ? "true" : "false") } }
+        ))
         HStack {
-          Text("Version \(model.status?.version ?? "?")")
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Version \(model.status?.version ?? "?")")
+            if let note = model.updateNote { Text(note).font(.caption).foregroundStyle(.secondary) }
+          }
           Spacer()
+          if model.update?.latest != nil {
+            Button("Install Update") { Task { await model.installUpdate() } }
+              .buttonStyle(.borderedProminent)
+              .disabled(model.busy != nil)
+          } else {
+            Button("Check Now") { Task { await model.checkForUpdates(manual: true) } }
+              .disabled(model.busy != nil)
+          }
           Button("Uninstall…") { confirmUninstall = true }
         }
         if uninstalled {

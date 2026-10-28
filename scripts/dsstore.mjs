@@ -18,7 +18,7 @@ export function readDsStore(buf) {
   const addresses = [];
   for (let i = 0; i < count; i++) addresses.push(buf.readUInt32BE(p + i * 4));
   p += Math.ceil(count / 256) * 256 * 4;
-  const toc = {};
+  const toc = Object.create(null);
   const entries = buf.readUInt32BE(p);
   p += 4;
   for (let i = 0; i < entries; i++) {
@@ -37,6 +37,7 @@ export function readDsStore(buf) {
   const records = [];
   const readRecord = (q) => {
     const nameLen = buf.readUInt32BE(q);
+    if (q + 4 + nameLen * 2 + 8 > buf.length) throw new Error('.DS_Store record runs past the end');
     const name = buf.subarray(q + 4, q + 4 + nameLen * 2).swap16().toString('utf16le');
     buf.subarray(q + 4, q + 4 + nameLen * 2).swap16(); // Swap back: subarray shares memory.
     q += 4 + nameLen * 2;
@@ -47,6 +48,7 @@ export function readDsStore(buf) {
     if (type === 'blob') size = 4 + buf.readUInt32BE(q);
     else if (type === 'ustr') size = 4 + buf.readUInt32BE(q) * 2;
     if (size === undefined) throw new Error(`.DS_Store record type ${type} isn't supported`);
+    if (q + size > buf.length) throw new Error('.DS_Store record runs past the end');
     if (records.length >= 10_000) throw new Error('.DS_Store has too many records');
     records.push({ name, code, type, value: Buffer.from(buf.subarray(q, q + size)) });
     return q + size;

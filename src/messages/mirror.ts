@@ -119,7 +119,9 @@ export function installReader(
     compileReader(source, tmp);
     const fresh = readerCdHash(tmp);
     if (!fresh) throw new Error("the reader's signature didn't verify after building it");
-    fs.rmSync(app, { recursive: true, force: true });
+    // Only ever replaces a reader: anything else already there is left alone.
+    removeReaderBundle(app);
+    if (fs.existsSync(app) || fs.lstatSync(app, { throwIfNoEntry: false })) throw new Error(`${app} already exists and isn't this project's reader; move it away first`);
     fs.renameSync(tmp, app);
     fs.writeFileSync(stamp, `${hash} ${fresh}\n`);
   } finally {
@@ -134,7 +136,7 @@ export function installReader(
  */
 export function removeReaderBundle(bundle: string): void {
   const parent = fs.lstatSync(path.dirname(bundle), { throwIfNoEntry: false });
-  if (!parent?.isDirectory() || parent.uid !== process.getuid!()) return;
+  if (!parent?.isDirectory() || parent.uid !== process.getuid!() || parent.mode & 0o022) return;
   const st = fs.lstatSync(bundle, { throwIfNoEntry: false });
   if (!st) return;
   if (st.isSymbolicLink()) return fs.unlinkSync(bundle);

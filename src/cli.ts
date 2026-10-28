@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildBrief, formatItem } from './brief.ts';
+import { downloadUpdate, latestRelease } from './update.ts';
 import { appBundle, type Config, configPath, ensureStateDir, INTERPRETERS, type InterpreterName, loadConfig, loadConfigDefaults, MODEL_NAME, paths, saveConfig } from './config.ts';
 import { interpretNow } from './interpret/run.ts';
 import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
@@ -339,6 +340,12 @@ function installedProgram(): string | null {
   return m ? m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&') : null;
 }
 
+/** The version the background service was installed at, from its launchd plist. */
+function installedVersion(): string | null {
+  if (!fs.existsSync(plistPath)) return null;
+  return /<key>IMESSAGE_AGENT_VERSION<\/key><string>([\d.]+)<\/string>/.exec(fs.readFileSync(plistPath, 'utf8'))?.[1] ?? null;
+}
+
 const version = (): string => JSON.parse(fs.readFileSync(path.join(path.dirname(cliPath), '..', 'package.json'), 'utf8')).version;
 
 /**
@@ -366,7 +373,7 @@ async function statusJson(): Promise<void> {
   const out: Record<string, unknown> = {
     mode: appBundle ? 'app' : 'cli',
     version: version(),
-    install: { state: !program ? 'none' : program === cliPath ? 'this' : 'other', program },
+    install: { state: !program ? 'none' : program === cliPath ? 'this' : 'other', program, version: installedVersion() },
     service: { running: Boolean(health) },
     reader: {
       path: readerApp(),
@@ -378,7 +385,12 @@ async function statusJson(): Promise<void> {
     interpreter: config.interpreter,
     items,
     callCommand: callCommand(),
-    config: { autoInterpretMinutes: config.autoInterpretMinutes, firstRunLookbackDays: config.firstRunLookbackDays, privateContacts: config.privateContacts },
+    config: {
+      autoInterpretMinutes: config.autoInterpretMinutes,
+      firstRunLookbackDays: config.firstRunLookbackDays,
+      privateContacts: config.privateContacts,
+      checkForUpdates: config.checkForUpdates,
+    },
   };
   if (flag('interpreters')) {
     out.interpreters = INTERPRETERS.map((name) => {
@@ -440,6 +452,7 @@ function plist(): string {
   const env: Record<string, string> = {
     PATH: [path.dirname(fs.realpathSync(process.execPath)), '/usr/bin', '/bin'].join(':'),
     IMESSAGE_AGENT_MIRROR: '1', // Read the reader's copy; node itself holds no special access.
+    IMESSAGE_AGENT_VERSION: version(), // So the app can tell the service is from an older version.
   };
   for (const name of INTERPRETERS) {
     const found = which(name);
@@ -544,6 +557,39 @@ function uninstallService(): void {
   console.log(`Removed the background service (${LABEL}), its reader and its copy of Messages.`);
 }
 
+/**
+ * The Mac app: `update --check` reports a newer release, `update --download` fetches and
+ * checks it and prints where it is (the app swaps it in). A clone: `update` pulls the latest
+ * code and restarts the service; `update --check` only says whether there's anything new.
+ */
+async function update(): Promise<void> {
+  if (appBundle) {
+    const release = await latestRelease(version());
+    if (flag('download')) {
+      if (!release) throw new Error('There is no newer version.');
+      console.log(JSON.stringify({ version: release.version, app: await downloadUpdate(release) }));
+    } else {
+      console.log(JSON.stringify({ current: version(), latest: release?.version ?? null, url: release?.url ?? null }));
+    }
+    return;
+  }
+  const repo = path.join(path.dirname(cliPath), '..');
+  const git = (...args: string[]) => execFileSync('/usr/bin/git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
+  if (flag('check')) {
+    git('fetch', '--quiet');
+    const behind = Number(git('rev-list', '--count', 'HEAD..@{u}'));
+    console.log(behind ? `${behind} new commit(s) on ${git('rev-parse', '--abbrev-ref', '@{u}')}: run node src/cli.ts update` : 'Up to date.');
+    return;
+  }
+  if (git('status', '--porcelain', '--untracked-files=no')) throw new Error(`${repo} has local changes; commit or stash them first`);
+  const before = git('rev-parse', 'HEAD');
+  console.log(execFileSync('/usr/bin/git', ['-C', repo, 'pull', '--ff-only'], { encoding: 'utf8' }).trim());
+  if (git('rev-parse', 'HEAD') === before) return;
+  execFileSync('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: repo, stdio: 'inherit' });
+  // The new code runs in a fresh process: install-service from the updated files.
+  execFileSync(process.execPath, [cliPath, 'install-service'], { stdio: 'inherit' });
+}
+
 async function main(): Promise<void> {
   sweepSnapshots();
   switch (command) {
@@ -609,6 +655,8 @@ async function main(): Promise<void> {
     case 'connect-app':
     case 'disconnect-app':
       return connectApp(rest[0], command === 'connect-app');
+    case 'update':
+      return update();
     case 'config':
       if (rest[0] !== 'set') throw new Error('Usage: node src/cli.ts config set <key> <json value>');
       return setConfig(rest[1], rest[2]);
@@ -626,6 +674,7 @@ Setup
                        Change one setting, e.g. config set autoInterpretMinutes 60
   connect-app <id> | disconnect-app <id>
                        Connect or disconnect one app (chatgpt, claude-desktop, claude-code, cursor)
+  update [--check]      Get the latest version (a clone: git pull, npm ci, restart the service)
   uninstall [--delete-data]
                        Disconnect apps and remove the service
 

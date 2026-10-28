@@ -82,6 +82,17 @@ struct MenuContent: View {
     Divider()
     Button("Set Up…") { open("setup") }
     Button("Settings…") { open("settings") }
+    if let latest = model.update?.latest {
+      Button("Install Update (\(latest))…") { Task { await model.installUpdate() } }
+        .disabled(model.busy != nil)
+    } else {
+      Button("Check for Updates…") {
+        Task {
+          await model.checkForUpdates(manual: true)
+          open("settings")
+        }
+      }
+    }
     Divider()
     Button("Quit (the background service keeps running)") { NSApp.terminate(nil) }
   }

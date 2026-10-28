@@ -30,8 +30,16 @@ jobs:
       - name: Public-repo safety (all files, commit authors and messages)
         run: npm run safety:all
       - run: npm test
+      # Reusing the last release's reader (when its inputs are unchanged) keeps people's Full
+      # Disk Access switched on across updates.
+      - name: Previous release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download --repo "$GITHUB_REPOSITORY" --pattern 'Messages-Agent-*.zip' --dir previous || echo "No previous release."
       - name: Build the app (Apple silicon and Intel)
-        run: node scripts/build-app.mjs
+        run: |
+          prev=$(ls previous/*.zip 2>/dev/null | head -1)
+          node scripts/build-app.mjs ${prev:+--reader-from "$prev"}
       - name: Test the build
         run: IMESSAGE_AGENT_APP='dist/Messages Agent.app' node --test test/app.test.ts
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

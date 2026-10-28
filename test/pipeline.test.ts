@@ -945,3 +945,30 @@ test('removing an old reader deletes only a reader this project built', async ()
   removeReaderBundle(path.join(base, 'LinkedApplications/target.app'));
   assert.ok(fs.existsSync(path.join(base, 'elsewhere/target.app')));
 });
+
+test('the update check reads only well-formed, newer releases from this repo', async () => {
+  const { latestRelease, newer, REPO } = await import('../src/update.ts');
+  assert.ok(newer('0.10.0', '0.9.9') && newer('1.0.0', '0.99.99') && !newer('0.2.0', '0.2.0') && !newer('0.1.9', '0.2.0'));
+  const dl = (v: string, name: string) => `https://github.com/${REPO}/releases/download/v${v}/${name}`;
+  const release = (tag: string, extra: Record<string, unknown> = {}) => ({
+    tag_name: tag,
+    assets: [
+      { name: `Messages-Agent-${tag.slice(1)}.zip`, browser_download_url: dl(tag.slice(1), `Messages-Agent-${tag.slice(1)}.zip`), size: 1000 },
+      { name: 'SHA256SUMS.txt', browser_download_url: dl(tag.slice(1), 'SHA256SUMS.txt'), size: 100 },
+    ],
+    ...extra,
+  });
+  const serve = (status: number, body: unknown) => async () => new Response(JSON.stringify(body), { status });
+  assert.equal(await latestRelease('0.2.0', serve(404, {})), null, 'no releases yet');
+  assert.equal(await latestRelease('0.2.0', serve(200, release('v0.2.0'))), null, 'not newer');
+  assert.equal(await latestRelease('0.2.0', serve(200, release('v0.3.0', { prerelease: true }))), null);
+  assert.equal(await latestRelease('0.2.0', serve(200, release('v0.3.0; rm -rf ~'))), null, 'a malformed tag is ignored');
+  const found = await latestRelease('0.2.0', serve(200, release('v0.3.0')));
+  assert.equal(found?.version, '0.3.0');
+  assert.equal(found?.zip.url, dl('0.3.0', 'Messages-Agent-0.3.0.zip'));
+  // Assets must be this release's own files on github.com.
+  const elsewhere = release('v0.3.0');
+  (elsewhere.assets[0] as { browser_download_url: string }).browser_download_url = 'https://evil.example.com/Messages-Agent-0.3.0.zip';
+  await assert.rejects(latestRelease('0.2.0', serve(200, elsewhere)), /missing/);
+  await assert.rejects(latestRelease('0.2.0', serve(500, {})), /500/);
+});
