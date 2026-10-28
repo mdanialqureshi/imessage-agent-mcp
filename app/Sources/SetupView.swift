@@ -304,6 +304,21 @@ struct ServiceStep: View {
          done: s?.serviceReady ?? false, symbol: "gearshape.2") {
       if let s, s.serviceReady {
         Label("Running", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+      } else if s?.install.state == "this" && model.busyCommand == nil {
+        // Installed from here but not answering yet: it's starting (or restarting).
+        HStack(spacing: 8) {
+          ProgressView().controlSize(.small)
+          Text("Starting…").foregroundStyle(.secondary)
+        }
+        .task {
+          var tries = 0
+          while !Task.isCancelled && !(model.status?.serviceReady ?? false) && model.status?.install.state == "this" {
+            tries += 1
+            if tries == 15 { await model.installService() } // Still nothing after half a minute: install it again.
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await model.refresh()
+          }
+        }
       } else {
         if s?.install.state == "other" {
           Text("It's currently installed from \(s?.install.program ?? "another copy"). Installing here replaces that; your items are kept.")

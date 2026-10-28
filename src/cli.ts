@@ -756,9 +756,13 @@ async function main(): Promise<void> {
       return;
     case 'use':
       return useInterpreter(rest[0]);
-    case 'install-service':
+    case 'install-service': {
       buildReader();
-      return installService();
+      installService();
+      // Done once it answers, so whoever ran this (the app) sees it running straight away.
+      if (!(await waitForService(20_000))) throw new Error(`The service didn't start; see ${path.join(paths.stateDir, 'logs/service.log')}`);
+      return;
+    }
     case 'uninstall-service':
       return uninstallService();
     case 'start-service':
