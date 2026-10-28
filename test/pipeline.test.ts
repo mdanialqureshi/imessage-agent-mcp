@@ -864,3 +864,43 @@ test('the ownership check also covers links and access-control lists, and dates 
   assert.equal((line.match(/\*\*/g) ?? []).length, 2, line);
   assert.doesNotMatch(line, /\]\(/);
 });
+
+test('the ownership check follows every link on the way, and reads access lists exactly', { skip: process.platform !== 'darwin' && 'macOS only' }, async () => {
+  const { assertOnlyYoursToChange } = await import('../src/messages/mirror.ts');
+  const { execFileSync } = await import('node:child_process');
+  const base = path.join(dir, 'trust3');
+  fs.rmSync(base, { recursive: true, force: true });
+  for (const d of ['bin', 'real', 'shared']) fs.mkdirSync(path.join(base, d), { recursive: true });
+  for (const d of [base, path.join(base, 'bin'), path.join(base, 'real')]) fs.chmodSync(d, 0o755);
+  fs.chmodSync(path.join(base, 'shared'), 0o777);
+  const prog = path.join(base, 'real/prog');
+  fs.writeFileSync(prog, '', { mode: 0o755 });
+  // bin/claude → shared/link → real/prog: the middle link's folder is open to everyone.
+  fs.symlinkSync(prog, path.join(base, 'shared/link'));
+  fs.symlinkSync(path.join(base, 'shared/link'), path.join(base, 'bin/claude'));
+  assert.throws(() => assertOnlyYoursToChange(path.join(base, 'bin/claude')), /shared.*another account/);
+  fs.chmodSync(path.join(base, 'shared'), 0o755);
+  assert.doesNotThrow(() => assertOnlyYoursToChange(path.join(base, 'bin/claude')));
+  // A link in the folder part of the path counts too.
+  fs.symlinkSync(path.join(base, 'real'), path.join(base, 'shared/dir'));
+  fs.chmodSync(path.join(base, 'shared'), 0o777);
+  assert.throws(() => assertOnlyYoursToChange(path.join(base, 'shared/dir/prog')), /another account/);
+
+  // Harmless entries pass; any write-type entry for someone else is refused.
+  const real = path.join(base, 'real');
+  for (const harmless of ['everyone allow readsecurity,writeattr', 'everyone allow add_file,file_inherit,only_inherit', 'admin allow write', 'everyone deny delete']) {
+    execFileSync('/bin/chmod', ['+a', harmless, real]);
+    assert.doesNotThrow(() => assertOnlyYoursToChange(prog), harmless);
+    execFileSync('/bin/chmod', ['-N', real]);
+  }
+  for (const writes of ['everyone allow add_subdirectory', 'staff allow writeextattr']) {
+    execFileSync('/bin/chmod', ['+a', writes, real]);
+    assert.throws(() => assertOnlyYoursToChange(prog), /access-control list/, writes);
+    execFileSync('/bin/chmod', ['-N', real]);
+  }
+
+  const { validOp } = await import('../src/interpret/run.ts');
+  const op = { op: 'create', kind: 'plan', title: 'x', chat_ref: 'C1' };
+  assert.equal(validOp({ ...op, when_start: '2026-12-31T24:00' })!.when_start, null, 'no rolling into the next day');
+  assert.equal(validOp({ ...op, when_start: '2026-12-31T23:59' })!.when_start, '2026-12-31T23:59');
+});

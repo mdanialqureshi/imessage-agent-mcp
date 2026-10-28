@@ -71,8 +71,9 @@ export function ensureStateDir(): void {
   fs.mkdirSync(paths.stateDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(paths.stateDir, 0o700);
   // Mode bits alone don't make it private: an access-control list could still share it.
-  if (process.platform === 'darwin' && !stateDirChecked) spawnSync('/bin/chmod', ['-N', paths.stateDir], { stdio: 'ignore' });
-  stateDirChecked = true;
+  if (process.platform === 'darwin' && !stateDirChecked) {
+    stateDirChecked = spawnSync('/bin/chmod', ['-N', paths.stateDir], { stdio: 'ignore' }).status === 0;
+  }
 }
 
 export const INTERPRETERS: InterpreterName[] = ['claude', 'codex'];

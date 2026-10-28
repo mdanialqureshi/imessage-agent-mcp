@@ -141,8 +141,29 @@ function privateApplicationsDir(dir: string): void {
  * everything must belong to you or the system, with no write access for other users.
  */
 export function assertOnlyYoursToChange(file: string): void {
-  // Both the path as written (a link's own folder decides who can repoint it) and where it leads.
-  for (const start of new Set([path.resolve(file), fs.realpathSync(file)])) checkChain(start);
+  // Every link on the way (its own folders decide who can repoint it) and where it all leads.
+  for (const p of pathsOnTheWay(file)) checkChain(p);
+}
+
+/** Each link met while resolving file, one hop at a time, then the resolved path. */
+function pathsOnTheWay(file: string): string[] {
+  const found: string[] = [];
+  let pending = path.resolve(file);
+  for (let hops = 0; hops < 40; hops++) {
+    const parts = pending.split('/').filter(Boolean);
+    let prefix = '/';
+    let i = 0;
+    for (; i < parts.length; i++) {
+      const next = path.join(prefix, parts[i]);
+      if (fs.lstatSync(next).isSymbolicLink()) break;
+      prefix = next;
+    }
+    if (i === parts.length) return [...found, pending];
+    const link = path.join(prefix, parts[i]);
+    found.push(link);
+    pending = path.join(path.resolve(prefix, fs.readlinkSync(link)), ...parts.slice(i + 1));
+  }
+  throw new Error(`${file} goes through too many links`);
 }
 
 function checkChain(start: string): void {
@@ -163,16 +184,23 @@ function checkChain(start: string): void {
   }
 }
 
+/** Access-control permissions that let someone change a file or what a folder holds. */
+const ACL_WRITES = new Set(['write', 'append', 'writeextattr', 'writesecurity', 'chown', 'add_file', 'add_subdirectory', 'delete_child']);
+
 /** Whether an access-control list lets anyone else write to, add to or delete from p. */
 function sharedByAcl(p: string): boolean {
   const res = spawnSync('/bin/ls', ['-led', p], { encoding: 'utf8' });
-  const me = os.userInfo().username;
+  // Like the mode bits: you, and the groups that can change the system anyway.
+  const trusted = new Set([`user:${os.userInfo().username}`, 'group:admin', 'group:wheel']);
   return (res.stdout ?? '')
     .split('\n')
     .slice(1)
     .some((line) => {
-      const m = /^\s*\d+:\s+(\S+)\s+(?:inherited\s+)?allow\s+(\S+)/.exec(line);
-      return Boolean(m && m[1] !== `user:${me}` && /write|append|add_|delete_child|chown|security/.test(m[2]));
+      // Parsed from the end, since a directory group's name can contain spaces.
+      const m = /^\s*\d+:\s+(.+?)\s+(?:inherited\s+)?allow\s+([a-z_,]+)\s*$/.exec(line);
+      if (!m || trusted.has(m[1])) return false;
+      const perms = m[2].split(',');
+      return !perms.includes('only_inherit') && perms.some((perm) => ACL_WRITES.has(perm));
     });
 }
 

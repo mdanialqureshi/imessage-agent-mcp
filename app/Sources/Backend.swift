@@ -118,11 +118,17 @@ enum Backend {
     return Output(status: p.terminationStatus, out: String(decoding: o, as: UTF8.self), err: String(decoding: e, as: UTF8.self))
   }
 
-  /// Asks politely, then kills: an interactive shell ignores SIGTERM.
+  /// Asks politely, then kills: an interactive shell ignores SIGTERM. The whole process group,
+  /// so nothing it started can keep holding its output open.
   static func forceStop(_ p: Process) {
     guard p.isRunning else { return }
+    let pid = p.processIdentifier
+    kill(-pid, SIGTERM)
     p.terminate()
-    DispatchQueue.global().asyncAfter(deadline: .now() + 2) { if p.isRunning { kill(p.processIdentifier, SIGKILL) } }
+    DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+      kill(-pid, SIGKILL)
+      if p.isRunning { kill(pid, SIGKILL) }
+    }
   }
 
   /// Whether this app itself was given Full Disk Access by mistake (only the reader needs it).

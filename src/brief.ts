@@ -14,7 +14,7 @@ function addDays(d: Date, days: number): Date {
   return new Date(d.getTime() + days * 86400_000);
 }
 
-/** Untrusted text on one line, without the markup that could fake an item id, emphasis or a link. */
+/** Untrusted text on one line, without the markup that could fake an item id, emphasis or a Markdown link. */
 const plain = (text: string) => oneLine(text).replace(/[`*[\]<>]/g, '');
 
 function whenLabel(i: Item): string {
