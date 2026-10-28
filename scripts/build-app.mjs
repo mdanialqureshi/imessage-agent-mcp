@@ -27,6 +27,8 @@ const NODE = {
   },
 };
 const APP_ID = 'com.imessage-agent-mcp.app';
+/** The disk image window, in points, matching app/dmg/make-background.swift. Height includes the title bar. */
+const DMG_LAYOUT = { window: { width: 640, height: 428 }, iconSize: 112, app: [170, 190], applications: [470, 190] };
 const MIN_MACOS = '13.0';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -136,15 +138,11 @@ try {
   if (!args.includes('--no-package')) {
     step('Packaging');
     const name = `imessage-agent-${version}`;
-    const dmgRoot = path.join(work, 'dmg');
-    fs.mkdirSync(dmgRoot);
-    run('/usr/bin/ditto', [app, path.join(dmgRoot, 'imessage-agent.app')]);
-    fs.symlinkSync('/Applications', path.join(dmgRoot, 'Applications'));
     const dmg = path.join(out, `${name}.dmg`);
     const zip = path.join(out, `${name}.zip`);
     fs.rmSync(dmg, { force: true });
     fs.rmSync(zip, { force: true });
-    run('/usr/bin/hdiutil', ['create', '-volname', 'imessage-agent', '-srcfolder', dmgRoot, '-ov', '-format', 'ULMO', dmg]);
+    buildDmg(dmg);
     run('/usr/bin/ditto', ['-c', '-k', '--keepParent', app, zip]);
     const sums = [dmg, zip].map((f) => `${createHash('sha256').update(fs.readFileSync(f)).digest('hex')}  ${path.basename(f)}`);
     fs.writeFileSync(path.join(out, 'SHA256SUMS.txt'), sums.join('\n') + '\n');
@@ -153,4 +151,100 @@ try {
   console.log(`Built ${app}`);
 } finally {
   fs.rmSync(work, { recursive: true, force: true });
+}
+
+/**
+ * The disk image opens as the usual install window: the app on the left, an arrow, and
+ * Applications on the right, over a background. Finder saves that layout (in .DS_Store)
+ * while the image is writable; then it's compressed read-only. Needs a logged-in session,
+ * and the first time, permission for the terminal to control Finder.
+ */
+function buildDmg(dmg) {
+  const staging = path.join(work, 'dmg');
+  fs.mkdirSync(path.join(staging, '.background'), { recursive: true });
+  run('/usr/bin/ditto', [app, path.join(staging, 'imessage-agent.app')]);
+  fs.symlinkSync('/Applications', path.join(staging, 'Applications'));
+  const bgTool = path.join(work, 'make-background');
+  run('/usr/bin/swiftc', ['-O', '-target', `${native}-apple-macos${MIN_MACOS}`, path.join(root, 'app/dmg/make-background.swift'), '-o', bgTool]);
+  run(bgTool, [work]);
+  run('/usr/bin/tiffutil', ['-cathidpicheck', path.join(work, 'background.png'), path.join(work, 'background-2x.png'), '-out', path.join(staging, '.background/background.tiff')]);
+
+  const rw = path.join(work, 'rw.dmg');
+  run('/usr/bin/hdiutil', ['create', '-volname', 'imessage-agent', '-srcfolder', staging, '-fs', 'HFS+', '-format', 'UDRW', '-ov', rw]);
+  // Mounted where Finder can see it; its name may get a number if another copy is open.
+  const attached = run('/usr/bin/hdiutil', ['attach', rw, '-readwrite', '-noverify', '-noautoopen', '-plist'], { encoding: 'utf8' });
+  const mount = /<key>mount-point<\/key>\s*<string>([^<]+)<\/string>/.exec(attached)?.[1];
+  if (!mount) throw new Error("couldn't mount the disk image");
+  try {
+    const disk = path.basename(mount).replace(/["\\]/g, '');
+    const { window, iconSize, app: appAt, applications } = DMG_LAYOUT;
+    const script = `tell application "Finder"
+  tell disk "${disk}"
+    open
+    set current view of container window to icon view
+    set toolbar visible of container window to false
+    set statusbar visible of container window to false
+    try
+      set pathbar visible of container window to false
+    end try
+    set the bounds of container window to {200, 120, ${200 + window.width}, ${120 + window.height}}
+    set opts to the icon view options of container window
+    set arrangement of opts to not arranged
+    set icon size of opts to ${iconSize}
+    set text size of opts to 13
+    set background picture of opts to file ".background:background.tiff"
+    set position of item "imessage-agent.app" of container window to {${appAt.join(', ')}}
+    set position of item "Applications" of container window to {${applications.join(', ')}}
+    close
+    open
+    update without registering applications
+    delay 2
+    close
+  end tell
+end tell`;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        run('/usr/bin/osascript', ['-e', script]);
+        break;
+      } catch (err) {
+        // Finder sometimes times out on a freshly mounted volume.
+        if (attempt === 3) throw new Error(`Finder couldn't lay out the disk image window (allow your terminal to control Finder in System Settings → Privacy & Security → Automation): ${err.message}`);
+      }
+    }
+    for (let i = 0; i < 50 && !fs.existsSync(path.join(mount, '.DS_Store')); i++) run('/bin/sleep', ['0.2']);
+    if (!fs.existsSync(path.join(mount, '.DS_Store'))) throw new Error("Finder didn't save the disk image's window layout");
+    // Added after Finder is done, since Finder removes it: the volume's icon in Finder and on the desktop.
+    fs.copyFileSync(path.join(contents, 'Resources/AppIcon.icns'), path.join(mount, '.VolumeIcon.icns'));
+    run('/usr/bin/SetFile', ['-a', 'C', mount]);
+    fs.rmSync(path.join(mount, '.fseventsd'), { recursive: true, force: true });
+    run('/bin/sync');
+  } finally {
+    detach(mount);
+  }
+  run('/usr/bin/hdiutil', ['convert', rw, '-format', 'ULMO', '-o', dmg]);
+
+  // Check the result: the layout, the background and the app all made it in.
+  const check = run('/usr/bin/hdiutil', ['attach', dmg, '-readonly', '-nobrowse', '-noautoopen', '-plist'], { encoding: 'utf8' });
+  const at = /<key>mount-point<\/key>\s*<string>([^<]+)<\/string>/.exec(check)?.[1];
+  try {
+    for (const f of ['.DS_Store', '.background/background.tiff', '.VolumeIcon.icns', 'imessage-agent.app/Contents/Info.plist']) {
+      if (!at || !fs.existsSync(path.join(at, f))) throw new Error(`the disk image is missing ${f}`);
+    }
+    if (fs.readlinkSync(path.join(at, 'Applications')) !== '/Applications') throw new Error('the disk image has no Applications link');
+    run('/usr/bin/codesign', ['--verify', '--deep', '--strict', path.join(at, 'imessage-agent.app')]);
+  } finally {
+    if (at) detach(at);
+  }
+}
+
+function detach(mount) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      run('/usr/bin/hdiutil', ['detach', mount, ...(attempt > 3 ? ['-force'] : [])]);
+      return;
+    } catch (err) {
+      if (attempt === 5) throw err;
+      run('/bin/sleep', ['1']);
+    }
+  }
 }

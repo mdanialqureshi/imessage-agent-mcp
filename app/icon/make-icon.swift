@@ -1,5 +1,5 @@
 // Draws the app icon into an .iconset folder: `make-icon <out.iconset>`, then `iconutil -c icns`.
-// A speech bubble with a checkmark: messages, turned into things to do.
+// A speech bubble with a small robot face: messages, read by an agent.
 import AppKit
 
 let out = URL(fileURLWithPath: CommandLine.arguments[1])
@@ -43,16 +43,22 @@ func render(_ px: Int) -> Data {
   ctx.setFillColor(NSColor.white.cgColor)
   ctx.fillPath()
 
-  // The checkmark.
-  let check = CGMutablePath()
-  check.move(to: CGPoint(x: 390, y: 545))
-  check.addLine(to: CGPoint(x: 480, y: 455))
-  check.addLine(to: CGPoint(x: 650, y: 625))
-  ctx.addPath(check)
-  ctx.setStrokeColor(NSColor(srgbRed: 0.28, green: 0.30, blue: 0.92, alpha: 1).cgColor)
-  ctx.setLineWidth(62)
+  // The robot: a rounded head with an antenna, two eyes and a small smile, in one line weight.
+  let ink = NSColor(srgbRed: 0.28, green: 0.30, blue: 0.92, alpha: 1).cgColor
+  ctx.setStrokeColor(ink)
+  ctx.setFillColor(ink)
+  ctx.setLineWidth(40)
   ctx.setLineCap(.round)
   ctx.setLineJoin(.round)
+  ctx.addPath(CGPath(roundedRect: CGRect(x: 382, y: 415, width: 260, height: 205), cornerWidth: 62, cornerHeight: 62, transform: nil))
+  ctx.move(to: CGPoint(x: 512, y: 620))
+  ctx.addLine(to: CGPoint(x: 512, y: 664))
+  ctx.strokePath()
+  ctx.fillEllipse(in: CGRect(x: 488, y: 662, width: 48, height: 48))
+  for x in [459, 565] { ctx.fillEllipse(in: CGRect(x: x - 24, y: 513, width: 48, height: 48)) }
+  ctx.setLineWidth(26)
+  ctx.move(to: CGPoint(x: 476, y: 474))
+  ctx.addQuadCurve(to: CGPoint(x: 548, y: 474), control: CGPoint(x: 512, y: 452))
   ctx.strokePath()
 
   NSGraphicsContext.restoreGraphicsState()
