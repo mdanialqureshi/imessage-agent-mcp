@@ -66,14 +66,17 @@ export function configPath(): string {
 }
 
 /** The state dir holds message excerpts and the service's socket, so it's private to this user. */
+let stateDirChecked = false;
 export function ensureStateDir(): void {
   fs.mkdirSync(paths.stateDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(paths.stateDir, 0o700);
   // Mode bits alone don't make it private: an access-control list could still share it.
-  if (process.platform === 'darwin') spawnSync('/bin/chmod', ['-N', paths.stateDir], { stdio: 'ignore' });
+  if (process.platform === 'darwin' && !stateDirChecked) spawnSync('/bin/chmod', ['-N', paths.stateDir], { stdio: 'ignore' });
+  stateDirChecked = true;
 }
 
 export const INTERPRETERS: InterpreterName[] = ['claude', 'codex'];
+export const MODEL_NAME = /^\w[\w.:-]{0,99}$/;
 
 export function loadConfigDefaults(): Config {
   return structuredClone(defaults);
@@ -97,5 +100,7 @@ export function loadConfig(): Config {
   const fromEnv = process.env.IMESSAGE_AGENT_INTERPRETER as InterpreterName | undefined;
   if (fromEnv) config.interpreter = fromEnv;
   if (!INTERPRETERS.includes(config.interpreter)) throw new Error(`interpreter must be "claude" or "codex", got "${config.interpreter}"`);
+  // Passed to the interpreter as an argument, so a hand-edited value can't become an option.
+  if (config.model !== null && !(typeof config.model === 'string' && MODEL_NAME.test(config.model))) config.model = null;
   return config;
 }

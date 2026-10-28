@@ -93,7 +93,7 @@ enum Backend {
       p.standardError = FileHandle.nullDevice
       p.standardInput = FileHandle.nullDevice
       do { try p.run() } catch { return Output(status: -1, out: "", err: error.localizedDescription) }
-      let kill = DispatchWorkItem { if p.isRunning { p.terminate() } }
+      let kill = DispatchWorkItem { forceStop(p) }
       DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: kill)
       p.waitUntilExit()
       kill.cancel()
@@ -104,7 +104,7 @@ enum Backend {
     p.standardError = err
     p.standardInput = FileHandle.nullDevice
     do { try p.run() } catch { return Output(status: -1, out: "", err: error.localizedDescription) }
-    let kill = DispatchWorkItem { if p.isRunning { p.terminate() } }
+    let kill = DispatchWorkItem { forceStop(p) }
     DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: kill)
     var o = Data(), e = Data()
     let group = DispatchGroup()
@@ -118,9 +118,21 @@ enum Backend {
     return Output(status: p.terminationStatus, out: String(decoding: o, as: UTF8.self), err: String(decoding: e, as: UTF8.self))
   }
 
+  /// Asks politely, then kills: an interactive shell ignores SIGTERM.
+  static func forceStop(_ p: Process) {
+    guard p.isRunning else { return }
+    p.terminate()
+    DispatchQueue.global().asyncAfter(deadline: .now() + 2) { if p.isRunning { kill(p.processIdentifier, SIGKILL) } }
+  }
+
   /// Whether this app itself was given Full Disk Access by mistake (only the reader needs it).
+  /// Probes the account's real home folder, not $HOME, and two protected folders, so neither
+  /// an overridden HOME nor a missing Messages folder hides it.
   static var appHasFullDiskAccess: Bool {
-    (try? FileManager.default.contentsOfDirectory(atPath: "\(home)/Library/Messages")) != nil
+    let real = getpwuid(getuid()).flatMap { $0.pointee.pw_dir.map { String(cString: $0) } } ?? NSHomeDirectory()
+    return ["Library/Messages", "Library/Safari", "Library/Mail"].contains { folder in
+      (try? FileManager.default.contentsOfDirectory(atPath: "\(real)/\(folder)")) != nil
+    }
   }
 }
 

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildBrief, formatItem } from './brief.ts';
-import { appBundle, type Config, configPath, ensureStateDir, INTERPRETERS, type InterpreterName, loadConfig, loadConfigDefaults, paths, saveConfig } from './config.ts';
+import { appBundle, type Config, configPath, ensureStateDir, INTERPRETERS, type InterpreterName, loadConfig, loadConfigDefaults, MODEL_NAME, paths, saveConfig } from './config.ts';
 import { interpretNow } from './interpret/run.ts';
 import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
@@ -315,7 +315,7 @@ function setConfig(key: string | undefined, raw: string | undefined): void {
   const expected = key && key !== 'interpreter' && Object.hasOwn(defaults, key) ? defaults[key] : undefined;
   const valid =
     key === 'model'
-      ? value === null || (typeof value === 'string' && /^\w[\w.:-]{0,99}$/.test(value)) // Never starting with "-": it's passed as an argument.
+      ? value === null || (typeof value === 'string' && MODEL_NAME.test(value)) // Never starting with "-": it's passed as an argument.
       : typeof expected === 'number'
         ? Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 100_000
         : typeof expected === 'boolean'

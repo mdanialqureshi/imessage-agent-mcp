@@ -11,7 +11,10 @@ import { buildPrompt, type PromptChat } from './prompt.ts';
 /** A date or date-time the brief can sort and compare; anything else is dropped. */
 function isoDate(v: unknown): string | null {
   if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})?)?$/.test(v)) return null;
-  return Number.isNaN(Date.parse(v)) ? null : v;
+  // Date.parse rolls impossible dates over (Feb 31 → Mar 3); the date must survive unchanged.
+  const [y, m, d] = v.slice(0, 10).split('-').map(Number);
+  const day = new Date(Date.UTC(y, m - 1, d));
+  return day.getUTCFullYear() === y && day.getUTCMonth() === m - 1 && day.getUTCDate() === d && !Number.isNaN(Date.parse(v)) ? v : null;
 }
 import { InterpreterUnavailable, interpreter, type RawOp, ToolUseAttempt } from './runners.ts';
 

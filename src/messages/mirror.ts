@@ -141,10 +141,18 @@ function privateApplicationsDir(dir: string): void {
  * everything must belong to you or the system, with no write access for other users.
  */
 export function assertOnlyYoursToChange(file: string): void {
+  // Both the path as written (a link's own folder decides who can repoint it) and where it leads.
+  for (const start of new Set([path.resolve(file), fs.realpathSync(file)])) checkChain(start);
+}
+
+function checkChain(start: string): void {
   const me = process.getuid!();
-  let p = fs.realpathSync(file);
+  let p = start;
   for (;;) {
     const st = fs.lstatSync(p);
+    if (process.platform === 'darwin' && sharedByAcl(p)) {
+      throw new Error(`${p} could be changed by another account on this Mac (an access-control list lets others write to it), and the background service would run it as you.`);
+    }
     // Group write is fine for wheel and admin (like /Applications or Homebrew's folders): their members can change anything anyway.
     const systemGroupWrite = st.gid === 0 || st.gid === 80;
     if ((st.uid !== me && st.uid !== 0) || st.mode & 0o002 || (st.mode & 0o020 && !systemGroupWrite)) {
@@ -153,6 +161,19 @@ export function assertOnlyYoursToChange(file: string): void {
     if (p === '/') return;
     p = path.dirname(p);
   }
+}
+
+/** Whether an access-control list lets anyone else write to, add to or delete from p. */
+function sharedByAcl(p: string): boolean {
+  const res = spawnSync('/bin/ls', ['-led', p], { encoding: 'utf8' });
+  const me = os.userInfo().username;
+  return (res.stdout ?? '')
+    .split('\n')
+    .slice(1)
+    .some((line) => {
+      const m = /^\s*\d+:\s+(\S+)\s+(?:inherited\s+)?allow\s+(\S+)/.exec(line);
+      return Boolean(m && m[1] !== `user:${me}` && /write|append|add_|delete_child|chown|security/.test(m[2]));
+    });
 }
 
 export interface ReaderStatus {

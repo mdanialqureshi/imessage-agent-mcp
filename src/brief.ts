@@ -14,17 +14,18 @@ function addDays(d: Date, days: number): Date {
   return new Date(d.getTime() + days * 86400_000);
 }
 
+/** Untrusted text on one line, without the markup that could fake an item id, emphasis or a link. */
+const plain = (text: string) => oneLine(text).replace(/[`*[\]<>]/g, '');
+
 function whenLabel(i: Item): string {
-  if (!i.whenStart) return oneLine(i.whenText ?? '');
+  if (!i.whenStart) return plain(i.whenText ?? '');
   const date = new Date(i.whenStart.length === 10 ? `${i.whenStart}T12:00` : i.whenStart);
-  if (Number.isNaN(date.getTime())) return oneLine(i.whenText ?? i.whenStart);
+  if (Number.isNaN(date.getTime())) return plain(i.whenText ?? i.whenStart);
   const day = date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   const time = i.precision === 'exact' ? ' ' + date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : '';
-  return `${day}${time}${i.whenText ? ` ("${oneLine(i.whenText)}")` : ''}`;
+  return `${day}${time}${i.whenText ? ` ("${plain(i.whenText)}")` : ''}`;
 }
 
-/** Untrusted text on one line, without the backticks and asterisks that could fake an item id or emphasis. */
-const plain = (text: string) => oneLine(text).replace(/[`*]/g, '');
 
 export function formatItem(i: Item, opts: { since?: string; evidence?: number } = {}): string {
   const isNew = opts.since && i.createdAt > opts.since ? '🆕 ' : '';

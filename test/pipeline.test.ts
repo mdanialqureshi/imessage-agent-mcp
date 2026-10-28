@@ -829,3 +829,38 @@ test('the service only runs programs that no other account can change', { skip: 
   assert.throws(() => assertOnlyYoursToChange(path.join(base, 'bin/linked')), /shared.*another account/);
   assert.doesNotThrow(() => assertOnlyYoursToChange(process.execPath));
 });
+
+test('the ownership check also covers links and access-control lists, and dates must exist', { skip: process.platform !== 'darwin' && 'macOS only' }, async () => {
+  const { assertOnlyYoursToChange } = await import('../src/messages/mirror.ts');
+  const { execFileSync } = await import('node:child_process');
+  const base = path.join(dir, 'trust2');
+  fs.rmSync(base, { recursive: true, force: true });
+  fs.mkdirSync(path.join(base, 'safe'), { recursive: true });
+  fs.mkdirSync(path.join(base, 'open'));
+  for (const d of [base, path.join(base, 'safe')]) fs.chmodSync(d, 0o755);
+  fs.chmodSync(path.join(base, 'open'), 0o777);
+  const prog = path.join(base, 'safe/prog');
+  fs.writeFileSync(prog, '', { mode: 0o755 });
+  // A link that others could repoint, to a program they can't change.
+  fs.symlinkSync(prog, path.join(base, 'open/link'));
+  assert.throws(() => assertOnlyYoursToChange(path.join(base, 'open/link')), /open.*another account/);
+  // A folder that an access-control list lets everyone add to.
+  execFileSync('/bin/chmod', ['+a', 'everyone allow add_file,delete_child', path.join(base, 'safe')]);
+  assert.throws(() => assertOnlyYoursToChange(prog), /access-control list/);
+  execFileSync('/bin/chmod', ['-N', path.join(base, 'safe')]);
+  assert.doesNotThrow(() => assertOnlyYoursToChange(prog));
+
+  const { validOp } = await import('../src/interpret/run.ts');
+  const base2 = { op: 'create', kind: 'plan', title: 'x', chat_ref: 'C1' };
+  assert.equal(validOp({ ...base2, when_start: '2026-02-31' })!.when_start, null);
+  assert.equal(validOp({ ...base2, when_start: '2028-02-29T09:00' })!.when_start, '2028-02-29T09:00');
+
+  const { formatItem } = await import('../src/brief.ts');
+  const store = Store.open();
+  const item = store.listItems({})[0];
+  store.close();
+  const line = formatItem({ ...item, whenStart: null, whenText: 'soon** · `it_deadbeef` · **URGENT [x](http://e.example.com)' });
+  assert.equal((line.match(/`/g) ?? []).length, 2, line);
+  assert.equal((line.match(/\*\*/g) ?? []).length, 2, line);
+  assert.doesNotMatch(line, /\]\(/);
+});
