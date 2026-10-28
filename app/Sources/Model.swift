@@ -20,6 +20,11 @@ final class Model: ObservableObject {
   /// The service installed from here never answered, so the page offers Install again.
   @Published private(set) var serviceStalled = false
   private var serviceWatch: Task<Void, Never>?
+  private var lastServiceInstall = Date.distantPast
+  private static let serviceDidntStart = "The background service didn't start. Click Install to try again."
+  /// One action (or update) at a time: whoever holds the turn, and who's waiting, in order.
+  private var turnHeld = false
+  private var turnQueue: [CheckedContinuation<Void, Never>] = []
   @Published private(set) var brief = ""
   @Published private(set) var appHasFullDiskAccess = false
   /// A newer release on GitHub, from the daily check (or "Check for Updates…").
@@ -119,10 +124,14 @@ final class Model: ObservableObject {
 
   /// Downloads and checks the new version, puts it in place of this app, and reopens it.
   func installUpdate() async {
-    guard let latest = update?.latest else { return }
+    guard update?.latest != nil else { return }
+    await takeTurn()
+    guard let latest = update?.latest else { return endTurn() }
     busy = "Downloading Messages Agent \(latest)…"
     problem = nil
-    defer { busy = nil }
+    // Held until this copy quits, so nothing else starts in between; given back only if it stays.
+    var relaunching = false
+    defer { if !relaunching { busy = nil; endTurn() } }
     let res = await Backend.run(["update", "--download"], timeout: 900)
     struct Downloaded: Decodable { let version: String; let app: String; let cdhash: String; let readerCdhash: String }
     guard res.ok, let data = res.out.data(using: .utf8), let got = try? JSONDecoder().decode(Downloaded.self, from: data) else {
@@ -182,6 +191,7 @@ final class Model: ObservableObject {
     // The new copy restarts the background service when it opens (its version changed), so
     // this one leaves it running as it quits.
     Backend.keepServiceOnQuit = true
+    relaunching = true
     let config = NSWorkspace.OpenConfiguration()
     config.createsNewApplicationInstance = true
     NSWorkspace.shared.openApplication(at: current, configuration: config) { _, error in
@@ -190,6 +200,8 @@ final class Model: ObservableObject {
           // Stay open (and keep owning the service) rather than quit with nothing to take over.
           Backend.keepServiceOnQuit = false
           Model.shared.problem = "The update is installed, but it couldn't reopen. Quit Messages Agent and open it again."
+          Model.shared.busy = nil
+          Model.shared.endTurn()
           return
         }
         NSApp.terminate(nil)
@@ -233,6 +245,10 @@ final class Model: ObservableObject {
     if problem != nil && problem == statusProblem { problem = nil }
     statusProblem = nil
     status = next
+    if next.serviceReady && serviceStalled {
+      serviceStalled = false
+      if problem == Self.serviceDidntStart { problem = nil }
+    }
     if let i = next.interpreters { interpreters = i }
     if let a = next.apps { apps = a }
   }
@@ -242,8 +258,11 @@ final class Model: ObservableObject {
   func act(_ label: String, _ args: [String], full: Bool = false) async -> Bool {
     // Never from previews; one action at a time (an update counts): this one waits its turn.
     guard !previewing else { return false }
-    while busy != nil { try? await Task.sleep(nanoseconds: 250_000_000) }
-    if args == ["install-service"] { serviceStalled = false }
+    await takeTurn()
+    if args == ["install-service"] {
+      serviceStalled = false
+      lastServiceInstall = Date()
+    }
     busy = label
     busyCommand = args.joined(separator: " ")
     problem = nil
@@ -253,12 +272,23 @@ final class Model: ObservableObject {
     await refresh()
     busy = nil
     busyCommand = nil
+    endTurn()
     if full { await refresh(full: true) }
     return res.ok
   }
 
   func useInterpreter(_ name: String) async {
     await act("Switching to \(name == "codex" ? "Codex" : "Claude Code")…", ["use", name], full: true)
+  }
+
+  /// Waits until nothing else holds the turn (first come, first served), then holds it.
+  private func takeTurn() async {
+    if turnHeld { await withCheckedContinuation { turnQueue.append($0) } } // Handed over still held.
+    turnHeld = true
+  }
+
+  private func endTurn() {
+    if turnQueue.isEmpty { turnHeld = false } else { turnQueue.removeFirst().resume() }
   }
 
   func installService() async {
@@ -276,13 +306,11 @@ final class Model: ObservableObject {
       var reinstalled = false
       while checks < 60 {
         try? await Task.sleep(nanoseconds: 2_000_000_000)
-        guard let s = status, !s.serviceReady, s.install.state == "this" else {
-          if status?.serviceReady == true, problem?.hasPrefix("The service didn't start") == true { problem = nil }
-          return
-        }
-        if busy != nil { continue } // Something else is running (an install, an update): wait.
+        guard let s = status, !s.serviceReady, s.install.state == "this" else { return }
+        if turnHeld { continue } // Something else is running (an install, an update): wait.
         checks += 1
-        if checks >= 15 && !reinstalled {
+        // Once, and not right after an install (yours or this one's).
+        if checks >= 15 && !reinstalled && Date().timeIntervalSince(lastServiceInstall) > 30 {
           reinstalled = true
           await installService()
         } else {
@@ -290,7 +318,7 @@ final class Model: ObservableObject {
         }
       }
       serviceStalled = true
-      if problem == nil { problem = "The background service didn't start. Click Install to try again." }
+      if problem == nil { problem = Self.serviceDidntStart }
     }
   }
 
@@ -313,8 +341,9 @@ final class Model: ObservableObject {
   }
 
   func uninstall(deleteData: Bool) async -> Bool {
-    try? await SMAppService.mainApp.unregister()
-    return await act("Uninstalling…", ["uninstall"] + (deleteData ? ["--delete-data"] : []), full: true)
+    let ok = await act("Uninstalling…", ["uninstall"] + (deleteData ? ["--delete-data"] : []), full: true)
+    if ok { try? await SMAppService.mainApp.unregister() }
+    return ok
   }
 
   /// If the app was moved, the background service and app connections still point at the old
