@@ -1032,13 +1032,18 @@ test('the update check reads only well-formed, newer releases from this repo', a
   fs.rmSync(out, { recursive: true, force: true });
   fs.mkdirSync(path.join(out, top, 'Contents'), { recursive: true });
   fs.writeFileSync(path.join(out, top, 'Contents/Info.plist'), '');
-  const listed = new Set([top, `${top}/Contents`, `${top}/Contents/Info.plist`]);
+  const listed = new Map([[top, true], [`${top}/Contents`, true], [`${top}/Contents/Info.plist`, false]]);
   assert.doesNotThrow(() => unpackedMatches(out, listed));
   fs.writeFileSync(path.join(out, top, 'hidden.txt'), '');
   assert.throws(() => unpackedMatches(out, listed), /didn't show/);
   fs.rmSync(path.join(out, top, 'hidden.txt'));
   fs.symlinkSync('/etc', path.join(out, top, 'Contents/link'));
-  assert.throws(() => unpackedMatches(out, new Set([...listed, `${top}/Contents/link`])), /didn't show/);
+  assert.throws(() => unpackedMatches(out, new Map([...listed, [`${top}/Contents/link`, false]])), /didn't show/);
+  fs.rmSync(path.join(out, top, 'Contents/link'));
+  assert.throws(() => unpackedMatches(out, new Map([...listed, [`${top}/Contents/Info.plist`, true]])), /didn't show/, 'a file where a folder was listed');
+  // AppleDouble entries would be applied as attributes and permissions, not unpacked.
+  assert.throws(() => checkZipListing(zipWith([[`${top}/Contents/._Info.plist`, 0o100644]]), top), /unexpected file/);
+  assert.throws(() => checkZipListing(zipWith([[`${top}/__MACOSX/x`, 0o100644]]), top), /unexpected file/);
   // Nothing tacked on after the end record.
   assert.throws(() => checkZipListing(Buffer.concat([zipWith([[`${top}/`, 0o40755]]), Buffer.from('x')]), top), /isn't a zip|layout/);
 });

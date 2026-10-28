@@ -114,11 +114,13 @@ const cdhash = (target: string) => /^CDHash=([0-9a-f]{40,64})$/m.exec(signature(
  * Checks a zip's own listing before anything is unpacked: every entry inside the app's folder,
  * no "..", no absolute paths, and no links (the app has none), so unpacking can't write
  * anywhere else. Each listed entry's local header (the name ditto actually uses) must say the
- * same; one disk, no Zip64. Returns the listed paths: ditto reads the local headers front to
- * back, so whatever it unpacked is compared with them afterwards (see unpackedMatches).
+ * same; one disk, no Zip64. No "._" (AppleDouble) or __MACOSX entries: ditto would apply
+ * those as attributes and permissions instead of unpacking them. Returns the listed paths and
+ * whether each is a folder: ditto reads the local headers front to back, so whatever it
+ * unpacked is compared with them afterwards (see unpackedMatches).
  */
-export function checkZipListing(zip: Buffer, top: string): Set<string> {
-  const listed = new Set<string>();
+export function checkZipListing(zip: Buffer, top: string): Map<string, boolean> {
+  const listed = new Map<string, boolean>();
   let end = -1;
   for (let i = zip.length - 22; i >= Math.max(0, zip.length - 22 - 0xffff); i--) {
     if (zip.readUInt32LE(i) === 0x06054b50) {
@@ -153,11 +155,12 @@ export function checkZipListing(zip: Buffer, top: string): Set<string> {
     locals.push(local);
     const name = nameBytes.toString('utf8');
     const parts = name.split('/');
-    if (!name.startsWith(`${top}/`) || name.includes('\\') || parts.includes('..') || parts.includes('.') || name.includes('\0')) {
+    if (!name.startsWith(`${top}/`) || name.includes('\\') || parts.includes('..') || parts.includes('.') || name.includes('\0') ||
+        parts.some((part) => part.startsWith('._') || part === '__MACOSX')) {
       throw new Error(`the update has an unexpected file: ${JSON.stringify(name.slice(0, 200))}`);
     }
     if ((mode & 0o170000) === 0o120000) throw new Error(`the update has a link in it: ${JSON.stringify(name.slice(0, 200))}`);
-    listed.add(name.replace(/\/$/, ''));
+    listed.set(name.replace(/\/$/, ''), name.endsWith('/') || (mode & 0o170000) === 0o040000);
     p += 46 + nameLen + extraLen + commentLen;
   }
   if (p !== end) throw layout();
@@ -170,12 +173,12 @@ export function checkZipListing(zip: Buffer, top: string): Set<string> {
  * After unpacking: everything there is a plain file or folder the zip's listing names, so no
  * entry the listing didn't show (a hidden local header) slipped in.
  */
-export function unpackedMatches(dir: string, listed: Set<string>): void {
+export function unpackedMatches(dir: string, listed: Map<string, boolean>): void {
   const walk = (rel: string): void => {
     for (const entry of fs.readdirSync(path.join(dir, rel))) {
       const child = rel ? `${rel}/${entry}` : entry;
       const st = fs.lstatSync(path.join(dir, child));
-      if (!listed.has(child) || !(st.isFile() || st.isDirectory())) {
+      if (!listed.has(child) || !(st.isFile() || st.isDirectory()) || listed.get(child) !== st.isDirectory()) {
         throw new Error(`the update unpacked something its listing didn't show: ${JSON.stringify(child.slice(0, 200))}`);
       }
       if (st.isDirectory()) walk(child);
@@ -248,7 +251,8 @@ export async function downloadUpdate(
     fs.writeFileSync(zipPath, zip, { mode: 0o600 });
     const unpacked = path.join(dir, 'unpacked');
     fs.mkdirSync(unpacked, { mode: 0o700 });
-    execFileSync('/usr/bin/ditto', ['-x', '-k', zipPath, unpacked]);
+    // Files only: no attributes, permissions lists, resource forks or download flags from the zip.
+    execFileSync('/usr/bin/ditto', ['-x', '-k', '--norsrc', '--noextattr', '--noacl', '--noqtn', zipPath, unpacked]);
     fs.rmSync(zipPath);
     unpackedMatches(unpacked, listed);
     const entries = fs.readdirSync(unpacked);

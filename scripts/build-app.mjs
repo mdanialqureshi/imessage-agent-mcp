@@ -187,7 +187,9 @@ try {
     const dmg = path.join(work, `${name}.dmg`);
     const zip = path.join(work, `${name}.zip`);
     buildDmg(dmg);
-    run('/usr/bin/ditto', ['-c', '-k', '--keepParent', app, zip]);
+    // Without extended attributes, ACLs or resource forks (ditto stores those as "._" entries,
+    // which the updater refuses): the app's files and its signature are all it needs.
+    run('/usr/bin/ditto', ['-c', '-k', '--norsrc', '--noextattr', '--noacl', '--keepParent', app, zip]);
     const sums = [dmg, zip].map((f) => `${createHash('sha256').update(fs.readFileSync(f)).digest('hex')}  ${path.basename(f)}`);
     fs.writeFileSync(path.join(work, 'SHA256SUMS.txt'), sums.join('\n') + '\n');
     console.log(sums.join('\n'));

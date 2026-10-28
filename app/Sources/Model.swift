@@ -68,6 +68,8 @@ final class Model: ObservableObject {
   private static let backupPrefix = ".Messages Agent previous "
 
   private func removeLeftoverBackups() {
+    // Only once this copy checks out: otherwise the backup may be the good one.
+    guard Backend.verifiedCdHash(Backend.bundle) != nil else { return }
     let folder = Backend.bundle.deletingLastPathComponent()
     guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { return }
     for name in names where name.hasPrefix(Self.backupPrefix) && name.hasSuffix(".app") {
@@ -127,6 +129,10 @@ final class Model: ObservableObject {
     do {
       _ = try FileManager.default.replaceItemAt(current, withItemAt: staged, backupItemName: backupName, options: .withoutDeletingBackupItem)
     } catch {
+      // If it got as far as moving this copy aside, move it back.
+      if !FileManager.default.fileExists(atPath: current.path), FileManager.default.fileExists(atPath: backup.path) {
+        try? FileManager.default.moveItem(at: backup, to: current)
+      }
       problem = "Couldn't replace the app (\(error.localizedDescription)). Download it from GitHub instead."
       if let releasePage { NSWorkspace.shared.open(releasePage) }
       return
@@ -137,7 +143,12 @@ final class Model: ObservableObject {
       if restored, running != nil, Backend.verifiedCdHash(current) == running {
         problem = "The installed update didn't check out, so this version was put back."
       } else {
-        problem = "The installed update didn't check out, and this version couldn't be put back. Download Messages Agent again from GitHub."
+        // Keep the good copy where you can see it, rather than as a hidden backup.
+        let visible = current.deletingLastPathComponent().appendingPathComponent("Messages Agent (previous version).app")
+        let kept = FileManager.default.fileExists(atPath: backup.path) && (try? FileManager.default.moveItem(at: backup, to: visible)) != nil
+        problem = "The installed update didn't check out, and this version couldn't be put back"
+          + (kept ? " (it's in \(visible.deletingLastPathComponent().path) as \"\(visible.lastPathComponent)\")." : ".")
+          + " Download Messages Agent again from GitHub."
         if let releasePage { NSWorkspace.shared.open(releasePage) }
       }
       return
