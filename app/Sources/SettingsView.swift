@@ -82,6 +82,7 @@ struct SettingsView: View {
               .disabled(model.busy != nil)
           }
           Button("Uninstall…") { confirmUninstall = true }
+            .disabled(model.busy != nil)
         }
         if uninstalled {
           Text("Uninstalled. Now remove Messages Agent Reader from Full Disk Access, quit this app and move it to the Trash.")

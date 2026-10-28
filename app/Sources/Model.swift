@@ -240,8 +240,10 @@ final class Model: ObservableObject {
   /// Runs one CLI command as a user action, then refreshes. True if it succeeded.
   @discardableResult
   func act(_ label: String, _ args: [String], full: Bool = false) async -> Bool {
-    // One action at a time (an update counts), and never from previews.
-    guard busy == nil, !previewing else { return false }
+    // Never from previews; one action at a time (an update counts): this one waits its turn.
+    guard !previewing else { return false }
+    while busy != nil { try? await Task.sleep(nanoseconds: 250_000_000) }
+    if args == ["install-service"] { serviceStalled = false }
     busy = label
     busyCommand = args.joined(separator: " ")
     problem = nil
@@ -260,28 +262,35 @@ final class Model: ObservableObject {
   }
 
   func installService() async {
-    serviceStalled = false
     await act("Installing the background service…", ["install-service"])
   }
 
   /// A service installed from here that isn't answering yet: checks every 2 seconds, installs
-  /// it again once after half a minute, and gives up after two minutes. Only one watch runs.
+  /// it again once after half a minute, and gives up after two minutes of checks (time spent
+  /// waiting for another action or an update doesn't count). Only one watch runs.
   func watchService() {
     guard serviceWatch == nil, !previewing, !serviceStalled else { return }
     serviceWatch = Task {
       defer { serviceWatch = nil }
-      for tries in 1...60 {
+      var checks = 0
+      var reinstalled = false
+      while checks < 60 {
         try? await Task.sleep(nanoseconds: 2_000_000_000)
-        guard let s = status, !s.serviceReady, s.install.state == "this" else { return }
+        guard let s = status, !s.serviceReady, s.install.state == "this" else {
+          if status?.serviceReady == true, problem?.hasPrefix("The service didn't start") == true { problem = nil }
+          return
+        }
         if busy != nil { continue } // Something else is running (an install, an update): wait.
-        if tries == 15 {
+        checks += 1
+        if checks >= 15 && !reinstalled {
+          reinstalled = true
           await installService()
         } else {
           await refresh()
         }
       }
       serviceStalled = true
-      problem = "The background service didn't start. Click Install to try again."
+      if problem == nil { problem = "The background service didn't start. Click Install to try again." }
     }
   }
 
