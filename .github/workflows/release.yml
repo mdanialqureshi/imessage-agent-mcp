@@ -3,9 +3,10 @@ name: Release
 # Pushing a tag like v0.2.0 builds the Mac app, tests the build, and publishes it as a GitHub
 # release. Running it by hand only builds and tests.
 #
-# Two jobs, so nothing that runs third-party code (npm, the build, the tests) ever holds a
-# token that can write to the repo: `build` is read-only and hands its files to `publish`,
-# which only checks and uploads them.
+# Two jobs, so nothing that runs project dependencies (npm, the build, the tests) ever holds a
+# token that can write to the repo or the release key: `build` is read-only and hands its
+# files to `publish`, which only runs pinned GitHub actions and the runner's own tools to
+# check, sign and upload them.
 on:
   push:
     tags: ['v*']
@@ -38,10 +39,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ! gh release download --repo "$GITHUB_REPOSITORY" --pattern 'Messages-Agent-*.zip' --dir previous; then
+          prev=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName 2>/dev/null || true)
+          if [ -z "$prev" ] || ! gh release download "$prev" --repo "$GITHUB_REPOSITORY" --pattern 'Messages-Agent-*.zip' --dir previous; then
             echo "No previous release."
           elif ! gh attestation verify previous/*.zip --repo "$GITHUB_REPOSITORY" \
-              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"; then
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref "refs/tags/$prev" --deny-self-hosted-runners; then
             echo "::warning::The previous release's zip has no valid attestation from this workflow; building a fresh reader."
             rm -rf previous
           fi
@@ -65,6 +68,9 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    # The release key is an environment secret: only runs this environment allows (tags v*,
+    # with a reviewer) can read it, not any workflow someone pushes to a branch.
+    environment: release
     permissions:
       contents: write # to publish the release
       id-token: write # for the build provenance attestation
@@ -84,17 +90,23 @@ jobs:
           path: dist
       - name: The files match their checksums
         run: cd dist && sha256sum --check SHA256SUMS.txt
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-      # The app installs an update only if its checksums carry this signature. The key is a
-      # repository secret only this job sees; nothing that runs third-party code ever has it.
+      # The app installs an update only if its checksums carry this signature. Signed with the
+      # runner's own OpenSSL (nothing downloaded holds the key), then checked against the public
+      # key the app ships with, so a release signed with the wrong key fails here.
       - name: Sign the checksums for the in-app updater
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
-          test -n "$UPDATE_SIGNING_KEY" || { echo "::error::Add the UPDATE_SIGNING_KEY secret (see docs/security.md)."; exit 1; }
-          node scripts/sign-sums.mjs dist/SHA256SUMS.txt
+          test -n "$UPDATE_SIGNING_KEY" || { echo "::error::Add the UPDATE_SIGNING_KEY secret to the release environment (see docs/security.md)."; exit 1; }
+          umask 077
+          key="$RUNNER_TEMP/update-signing-key.pem"
+          printf '%s\n' "$UPDATE_SIGNING_KEY" > "$key"
+          openssl pkeyutl -sign -rawin -inkey "$key" -in dist/SHA256SUMS.txt -out "$RUNNER_TEMP/sig.bin"
+          rm -f "$key"
+          grep -o "UPDATE_PUBLIC_KEY = '[^']*'" src/update.ts | cut -d"'" -f2 | base64 -d > "$RUNNER_TEMP/pub.der"
+          openssl pkeyutl -verify -pubin -keyform DER -inkey "$RUNNER_TEMP/pub.der" -rawin -in dist/SHA256SUMS.txt -sigfile "$RUNNER_TEMP/sig.bin"
+          base64 -w0 "$RUNNER_TEMP/sig.bin" > dist/SHA256SUMS.txt.sig
+          echo >> dist/SHA256SUMS.txt.sig
       # Lets anyone check a download was built here from this tag: gh attestation verify <file> -R <repo>.
       # (GitHub only offers attestations for public repositories on most plans.)
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2

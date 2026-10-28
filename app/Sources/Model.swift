@@ -104,18 +104,23 @@ final class Model: ObservableObject {
       return
     }
     let current = Backend.bundle
+    let backupName = "Messages Agent (previous).app"
+    let backup = current.deletingLastPathComponent().appendingPathComponent(backupName)
     do {
-      _ = try FileManager.default.replaceItemAt(current, withItemAt: staged)
+      try? FileManager.default.removeItem(at: backup)
+      _ = try FileManager.default.replaceItemAt(current, withItemAt: staged, backupItemName: backupName, options: .withoutDeletingBackupItem)
     } catch {
       problem = "Couldn't replace the app (\(error.localizedDescription)). Download it from GitHub instead."
       if let url = update?.url.flatMap(URL.init(string:)) { NSWorkspace.shared.open(url) }
       return
     }
     guard Backend.verifiedCdHash(current) == got.cdhash else {
-      problem = "The installed update didn't check out. Download Messages Agent again from GitHub."
-      if let url = update?.url.flatMap(URL.init(string:)) { NSWorkspace.shared.open(url) }
+      // Put this version back rather than leave an app that didn't check out.
+      _ = try? FileManager.default.replaceItemAt(current, withItemAt: backup)
+      problem = "The installed update didn't check out, so this version was put back."
       return
     }
+    try? FileManager.default.removeItem(at: backup)
     // The new copy restarts the background service when it opens (its version changed).
     let config = NSWorkspace.OpenConfiguration()
     config.createsNewApplicationInstance = true

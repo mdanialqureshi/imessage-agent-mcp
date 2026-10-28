@@ -28,7 +28,11 @@ struct IMessageAgentApp: App {
       MenuLabel().environmentObject(model)
     }
     Window("Set Up Messages Agent", id: "setup") {
-      SetupView().environmentObject(model).showsInDock()
+      OnboardingView().environmentObject(model).showsInDock()
+    }
+    .windowResizability(.contentSize)
+    Window("Messages Agent", id: "overview") {
+      OverviewView().environmentObject(model).showsInDock()
     }
     .windowResizability(.contentSize)
     Window("Brief", id: "brief") {
@@ -80,6 +84,7 @@ struct MenuContent: View {
     Button("Check New Messages Now") { Task { await model.checkNow() } }
       .disabled(!(model.status?.ready ?? false) || model.busy != nil)
     Divider()
+    Button("Overview…") { open("overview") }
     Button("Set Up…") { open("setup") }
     Button("Settings…") { open("settings") }
     if let latest = model.update?.latest {

@@ -21,15 +21,21 @@ enum Previews {
       model.preview(try! JSONDecoder().decode(Status.self, from: Data(json.utf8)), mustMoveFirst: move)
       for dark in [false, true] {
         let suffix = dark ? "-dark" : ""
-        snapshot(SetupView().environmentObject(model), size: NSSize(width: 620, height: 720), dark: dark, to: dir.appendingPathComponent("setup-\(name)\(suffix).png"))
+        snapshot(OverviewView().environmentObject(model), size: NSSize(width: 620, height: 720), dark: dark, to: dir.appendingPathComponent("overview-\(name)\(suffix).png"))
+        // Each page of the guided setup, in this state.
+        let pages: [OnboardingView.Page] = move ? [.welcome] : name == "5-ready" ? OnboardingView.Page.allCases : [.interpreter, .service, .access]
+        for page in pages {
+          snapshot(OnboardingView(startPage: page).environmentObject(model), size: NSSize(width: 640, height: 620), dark: dark,
+                   to: dir.appendingPathComponent("setup-\(name)-\(page.rawValue)\(suffix).png"))
+        }
         if name == "5-ready" {
           snapshot(SettingsView().environmentObject(model), size: NSSize(width: 480, height: 600), dark: dark, to: dir.appendingPathComponent("settings\(suffix).png"))
         }
         if name == "4-needs-access" {
           // The whole scroll content, to check every step.
-          let full = SetupView(unrolled: true).environmentObject(model)
+          let full = OverviewView(unrolled: true).environmentObject(model)
           let height = NSHostingView(rootView: full).fittingSize.height
-          snapshot(full, size: NSSize(width: 620, height: height), dark: dark, to: dir.appendingPathComponent("setup-\(name)-full\(suffix).png"))
+          snapshot(full, size: NSSize(width: 620, height: height), dark: dark, to: dir.appendingPathComponent("overview-\(name)-full\(suffix).png"))
         }
       }
     }

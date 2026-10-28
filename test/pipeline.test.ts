@@ -990,22 +990,32 @@ test('the update check reads only well-formed, newer releases from this repo', a
   await assert.rejects(latestRelease('0.2.0', serve(200, unsigned)), /signature/);
   // The zip's own listing is checked before anything is unpacked.
   const { checkZipListing } = await import('../src/update.ts');
-  const zipWith = (names: [string, number][]) => {
+  // A minimal zip: local headers, then the central directory, then the end record.
+  const zipWith = (names: [string, number, string?][]) => {
+    const locals: Buffer[] = [];
     const cd: Buffer[] = [];
-    for (const [name, mode] of names) {
+    let offset = 0;
+    for (const [name, mode, localName = name] of names) {
+      const lh = Buffer.alloc(30);
+      lh.writeUInt32LE(0x04034b50, 0);
+      lh.writeUInt16LE(Buffer.byteLength(localName), 26);
+      locals.push(lh, Buffer.from(localName));
       const h = Buffer.alloc(46);
       h.writeUInt32LE(0x02014b50, 0);
       h.writeUInt16LE(Buffer.byteLength(name), 28);
       h.writeUInt32LE((mode << 16) >>> 0, 38);
+      h.writeUInt32LE(offset, 42);
       cd.push(h, Buffer.from(name));
+      offset += 30 + Buffer.byteLength(localName);
     }
     const dirBuf = Buffer.concat(cd);
     const end = Buffer.alloc(22);
     end.writeUInt32LE(0x06054b50, 0);
+    end.writeUInt16LE(names.length, 8);
     end.writeUInt16LE(names.length, 10);
     end.writeUInt32LE(dirBuf.length, 12);
-    end.writeUInt32LE(4, 16);
-    return Buffer.concat([Buffer.alloc(4), dirBuf, end]);
+    end.writeUInt32LE(offset, 16);
+    return Buffer.concat([...locals, dirBuf, end]);
   };
   const top = 'Messages Agent.app';
   assert.doesNotThrow(() => checkZipListing(zipWith([[`${top}/`, 0o40755], [`${top}/Contents/Info.plist`, 0o100644]]), top));
@@ -1014,4 +1024,8 @@ test('the update check reads only well-formed, newer releases from this repo', a
   assert.throws(() => checkZipListing(zipWith([['/tmp/evil', 0o100644]]), top), /unexpected file/);
   assert.throws(() => checkZipListing(zipWith([['Other.app/x', 0o100644]]), top), /unexpected file/);
   assert.throws(() => checkZipListing(Buffer.from('not a zip at all, just some bytes here'), top), /isn't a zip/);
+  // The name ditto uses (the local header's) must be the listed one.
+  assert.throws(() => checkZipListing(zipWith([[`${top}/a.txt`, 0o100644, `${top}/../a.txt`]]), top), /differently/);
+  // Nothing tacked on after the end record.
+  assert.throws(() => checkZipListing(Buffer.concat([zipWith([[`${top}/`, 0o40755]]), Buffer.from('x')]), top), /isn't a zip|layout/);
 });

@@ -113,7 +113,9 @@ const cdhash = (target: string) => /^CDHash=([0-9a-f]{40,64})$/m.exec(signature(
 /**
  * Checks a zip's own listing before anything is unpacked: every entry inside the app's folder,
  * no "..", no absolute paths, and no links (the app has none), so unpacking can't write
- * anywhere else.
+ * anywhere else. Each entry's local header (the name ditto actually uses) must say the same
+ * as the central directory, and the entries must tile the file exactly: one disk, no Zip64,
+ * nothing hidden between them.
  */
 export function checkZipListing(zip: Buffer, top: string): void {
   let end = -1;
@@ -123,17 +125,32 @@ export function checkZipListing(zip: Buffer, top: string): void {
       break;
     }
   }
+  const layout = () => new Error('the update has an unexpected zip layout');
   if (end < 0) throw new Error("the update isn't a zip file");
   const count = zip.readUInt16LE(end + 10);
   let p = zip.readUInt32LE(end + 16);
-  if (count === 0xffff || p === 0xffffffff || p >= end) throw new Error('the update has an unexpected zip layout');
+  const cdStart = p;
+  if (count === 0xffff || p === 0xffffffff || p >= end) throw layout();
+  // One disk, one end record that closes the file, no Zip64.
+  if (zip.readUInt16LE(end + 4) || zip.readUInt16LE(end + 6) || zip.readUInt16LE(end + 8) !== count) throw layout();
+  if (end + 22 + zip.readUInt16LE(end + 20) !== zip.length) throw layout();
+  if (end >= 20 && zip.readUInt32LE(end - 20) === 0x07064b50) throw layout();
+  if (cdStart + zip.readUInt32LE(end + 12) !== end) throw layout();
+  const locals: number[] = [];
   for (let i = 0; i < count; i++) {
-    if (p + 46 > end || zip.readUInt32LE(p) !== 0x02014b50) throw new Error('the update has an unexpected zip layout');
+    if (p + 46 > end || zip.readUInt32LE(p) !== 0x02014b50) throw layout();
     const nameLen = zip.readUInt16LE(p + 28);
     const extraLen = zip.readUInt16LE(p + 30);
     const commentLen = zip.readUInt16LE(p + 32);
     const mode = zip.readUInt32LE(p + 38) >>> 16;
-    const name = zip.toString('utf8', p + 46, p + 46 + nameLen);
+    const local = zip.readUInt32LE(p + 42);
+    const nameBytes = zip.subarray(p + 46, p + 46 + nameLen);
+    if (local + 30 + nameLen > cdStart || zip.readUInt32LE(local) !== 0x04034b50) throw layout();
+    if (zip.readUInt16LE(local + 26) !== nameLen || !zip.subarray(local + 30, local + 30 + nameLen).equals(nameBytes)) {
+      throw new Error("the update's zip names a file differently in two places");
+    }
+    locals.push(local);
+    const name = nameBytes.toString('utf8');
     const parts = name.split('/');
     if (!name.startsWith(`${top}/`) || name.includes('\\') || parts.includes('..') || parts.includes('.') || name.includes('\0')) {
       throw new Error(`the update has an unexpected file: ${JSON.stringify(name.slice(0, 200))}`);
@@ -141,6 +158,10 @@ export function checkZipListing(zip: Buffer, top: string): void {
     if ((mode & 0o170000) === 0o120000) throw new Error(`the update has a link in it: ${JSON.stringify(name.slice(0, 200))}`);
     p += 46 + nameLen + extraLen + commentLen;
   }
+  if (p !== end) throw layout();
+  // Entries in order, starting at the top of the file, each after the one before.
+  if (locals.length && locals[0] !== 0) throw layout();
+  for (let i = 1; i < locals.length; i++) if (locals[i] <= locals[i - 1]) throw layout();
 }
 
 /** Checks an unpacked app is this app, intact, at this version, with an intact reader. */

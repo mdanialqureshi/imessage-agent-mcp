@@ -628,7 +628,7 @@ async function update(): Promise<void> {
   // No hooks: nothing fetched may run during the update itself.
   const git = (...args: string[]) => execFileSync('/usr/bin/git', ['-c', 'core.hooksPath=/dev/null', '-C', repo, ...args], { encoding: 'utf8' }).trim();
   const origin = git('remote', 'get-url', 'origin');
-  if (!new RegExp(`^(https://github\\.com/|git@github\\.com:)${REPO.replace('.', '\\.')}(\\.git)?$`).test(origin)) {
+  if (!new RegExp(`^(https://github\\.com/|git@github\\.com:)${REPO.replace(/\./g, '\\.')}(\\.git)?$`).test(origin)) {
     throw new Error(`This clone's origin is ${origin}, not github.com/${REPO}; update it yourself.`);
   }
   git('fetch', '--quiet', '--tags', 'origin');
@@ -646,12 +646,21 @@ async function update(): Promise<void> {
     return;
   }
   if (git('status', '--porcelain', '--untracked-files=no')) throw new Error(`${repo} has local changes; commit or stash them first`);
+  // Releases are tagged on master; a tag anywhere else isn't one.
+  git('fetch', '--quiet', 'origin', 'master');
+  try {
+    git('merge-base', '--is-ancestor', `refs/tags/v${latest}`, 'FETCH_HEAD');
+  } catch {
+    throw new Error(`v${latest} isn't on master, so it isn't a release; not updating to it.`);
+  }
   try {
     console.log(git('merge', '--ff-only', `refs/tags/v${latest}`));
   } catch {
     throw new Error(`Couldn't move this clone to v${latest} without merging (it has commits of its own); update it yourself.`);
   }
-  execFileSync('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: repo, stdio: 'inherit' });
+  // The npm that came with this Node, not whatever is first on PATH.
+  const npm = path.join(path.dirname(process.execPath), 'npm');
+  execFileSync(fs.existsSync(npm) ? npm : 'npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: repo, stdio: 'inherit' });
   // The new code runs in a fresh process: install-service from the updated files.
   execFileSync(process.execPath, [cliPath, 'install-service'], { stdio: 'inherit' });
 }

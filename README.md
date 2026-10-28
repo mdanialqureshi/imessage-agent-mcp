@@ -46,16 +46,16 @@ You need macOS 13 or newer with Messages in iCloud, and [Claude Code](https://cl
 1. **Download** `Messages-Agent-<version>.dmg` from [Releases](https://github.com/mdanialqureshi/imessage-agent-mcp/releases/latest) and open it.
 2. **Drag Messages Agent onto Applications** in the window that opens, then open it from Applications.
 3. **Approve it once.** macOS says it can't verify the app, because it isn't notarized by Apple (that needs a paid developer account). Click **Done**, go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway**.
-4. **Follow the setup window:**
+4. **Follow the guided setup** (one step per page; **Continue** when each is done):
    1. Choose what reads your new messages: Claude Code or Codex.
    2. Click **Install** to start the background service.
-   3. Click **Open Full Disk Access**, drag the **Messages Agent Reader** icon from the setup window into the list, and switch it on. The step turns green within a few seconds.
+   3. Click **Open Full Disk Access**, drag the **Messages Agent Reader** icon from the setup page into the list, and switch it on. The page turns green within a few seconds.
    4. Click **Connect** next to the apps you use (ChatGPT, Claude, …), then quit and reopen them.
    5. Copy the message it shows you and send it to your agent.
 
 **Try it:** click the menu bar icon, open the brief and click **Check New Messages Now**. The first run reads the past week, so it takes a few minutes. Then ask your agent *"What do I owe people this week?"*
 
-The app lives in your menu bar, where you can see what needs attention and change settings. Quitting it doesn't stop the background service.
+The app lives in your menu bar, where you can see what needs attention, open the **Overview** (every step on one page) and change settings. Quitting it doesn't stop the background service.
 
 **Updating:** when there's a new version, the menu bar shows **Install Update**. Click it, and the app downloads it from this repo's Releases, checks it (its checksum, signature, identity and version), replaces itself, restarts the background service and reopens. Or click **Check Now** in Settings. Releases keep the same reader unless the reader itself changed, so Full Disk Access usually stays on; when it did change, the setup window asks you to switch it on for the new one.
 
