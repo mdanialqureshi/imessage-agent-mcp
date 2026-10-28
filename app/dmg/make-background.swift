@@ -43,7 +43,7 @@ func render(scale: Int) -> Data {
     let h = str.size().height
     str.draw(in: CGRect(x: 0, y: size.height - top - h, width: size.width, height: h))
   }
-  text("Drag imessage-agent into Applications", size: 19, weight: .semibold, color: NSColor(white: 0.12, alpha: 1), top: 38)
+  text("Drag Messages Agent into Applications", size: 19, weight: .semibold, color: NSColor(white: 0.12, alpha: 1), top: 38)
   text("Then open it from Applications to finish setting up.", size: 13, weight: .regular, color: NSColor(white: 0.42, alpha: 1), top: 296)
 
   NSGraphicsContext.restoreGraphicsState()

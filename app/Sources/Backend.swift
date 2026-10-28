@@ -1,13 +1,13 @@
 import Foundation
 
 /// Runs the CLI bundled inside the app (Contents/Resources/app/src/cli.ts) with the app's own
-/// Node. The app itself holds no special permissions: only imessage-agent-reader, a separate
+/// Node. The app itself holds no special permissions: only Messages Agent Reader, a separate
 /// program inside it, gets Full Disk Access.
 enum Backend {
   static let bundle = Bundle.main.bundleURL
   static let node = bundle.appendingPathComponent("Contents/Helpers/node")
   static let cli = bundle.appendingPathComponent("Contents/Resources/app/src/cli.ts")
-  static let reader = bundle.appendingPathComponent("Contents/Helpers/imessage-agent-reader.app")
+  static let reader = bundle.appendingPathComponent("Contents/Helpers/Messages Agent Reader.app")
   static let home = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.hasPrefix("/") ? $0 : nil } ?? NSHomeDirectory()
 
   /// Opened from a disk image or a quarantined download, macOS runs a read-only copy from a
@@ -72,7 +72,7 @@ enum Backend {
   }
 
   static let fullDiskAccessProblem =
-    "imessage-agent itself has Full Disk Access. It must not: switch it off in System Settings → Privacy & Security → Full Disk Access (only imessage-agent-reader needs it)."
+    "Messages Agent itself has Full Disk Access. It must not: switch it off in System Settings → Privacy & Security → Full Disk Access (only Messages Agent Reader needs it)."
 
 
   static func environment() -> [String: String] {

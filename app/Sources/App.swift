@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// imessage-agent: a menu bar app that sets up and watches the local background service.
+/// Messages Agent: a menu bar app that sets up and watches the local background service.
 /// Quitting it doesn't stop the service; launchd keeps that running.
 @main
 enum Main {
@@ -27,14 +27,14 @@ struct IMessageAgentApp: App {
     } label: {
       MenuLabel().environmentObject(model)
     }
-    Window("Set Up imessage-agent", id: "setup") {
+    Window("Set Up Messages Agent", id: "setup") {
       SetupView().environmentObject(model).showsInDock()
     }
     .windowResizability(.contentSize)
     Window("Brief", id: "brief") {
       BriefView().environmentObject(model).showsInDock()
     }
-    Window("imessage-agent Settings", id: "settings") {
+    Window("Messages Agent Settings", id: "settings") {
       SettingsView().environmentObject(model).showsInDock()
     }
     .windowResizability(.contentSize)

@@ -1,4 +1,4 @@
-// Checks a built imessage-agent.app: `npm run test:app` builds one and runs this.
+// Checks a built Messages Agent.app: `npm run test:app` builds one and runs this.
 // Skipped unless IMESSAGE_AGENT_APP points at the app.
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
@@ -16,7 +16,7 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const contents = app ? path.join(app, 'Contents') : '';
 const node = path.join(contents, 'Helpers/node');
 const cli = path.join(contents, 'Resources/app/src/cli.ts');
-const reader = path.join(contents, 'Helpers/imessage-agent-reader.app');
+const reader = path.join(contents, 'Helpers/Messages Agent Reader.app');
 
 const plist = (file: string, key: string) => execFileSync('/usr/bin/plutil', ['-extract', key, 'raw', '-o', '-', file], { encoding: 'utf8' }).trim();
 const signature = (target: string) => spawnSync('/usr/bin/codesign', ['-dv', target], { encoding: 'utf8' }).stderr;
@@ -80,7 +80,7 @@ test('nothing private or unexpected is in the bundle', { skip }, () => {
     const magic = fs.readFileSync(p).subarray(0, 4).toString('hex');
     return ['cafebabe', 'cffaedfe', 'cefaedfe'].includes(magic);
   });
-  assert.deepEqual(machO.sort(), ['Contents/Helpers/imessage-agent-reader.app/Contents/MacOS/imessage-agent-reader', 'Contents/Helpers/node', 'Contents/MacOS/imessage-agent']);
+  assert.deepEqual(machO.sort(), ['Contents/Helpers/Messages Agent Reader.app/Contents/MacOS/imessage-agent-reader', 'Contents/Helpers/node', 'Contents/MacOS/imessage-agent']);
 });
 
 test('the menu bar app runs the bundled CLI and understands its status', { skip }, () => {
@@ -98,7 +98,10 @@ test('in the app, the CLI uses the bundled Node and reader', { skip }, () => {
   assert.equal(status.reader.path, reader);
   assert.equal(status.reader.valid, true);
   assert.equal(status.install.state, 'none');
-  assert.ok(status.callCommand.startsWith(`${node} ${cli} call`), status.callCommand);
+  // Agents paste it into a shell, and the app's name has a space: it must survive word splitting.
+  const echoed = spawnSync('/bin/sh', ['-c', `printf '%s\\n' ${status.callCommand.replace(/ call$/, '')}`], { encoding: 'utf8' });
+  assert.deepEqual(echoed.stdout.trim().split('\n'), [node, cli], status.callCommand);
+  assert.ok(status.callCommand.endsWith(' call'), status.callCommand);
 
   // Connecting an app registers the bundled Node and CLI as the bridge.
   const claudeDir = path.join(home, 'Library/Application Support/Claude');

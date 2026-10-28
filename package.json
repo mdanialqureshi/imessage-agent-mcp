@@ -11,7 +11,7 @@
     "safety:all": "node scripts/check-public-safety.mjs --all --check-authors",
     "eval": "node test/eval/run-eval.ts",
     "build:app": "node scripts/build-app.mjs",
-    "test:app": "node scripts/build-app.mjs --arch native --no-package --out test/.tmp/app && IMESSAGE_AGENT_APP=test/.tmp/app/imessage-agent.app node --test test/app.test.ts"
+    "test:app": "node scripts/build-app.mjs --arch native --no-package --out test/.tmp/app && IMESSAGE_AGENT_APP='test/.tmp/app/Messages Agent.app' node --test test/app.test.ts"
   },
   "keywords": [
     "mcp",

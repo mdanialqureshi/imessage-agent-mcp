@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// Builds imessage-agent.app, the downloadable Mac app: a menu bar app (app/Sources) that
+// Builds Messages Agent.app, the downloadable Mac app: a menu bar app (app/Sources) that
 // bundles Node, this project's source and a prebuilt reader, so nothing else needs installing.
 //
 //   node scripts/build-app.mjs [--out dist] [--arch universal|native] [--no-package]
 //
-// Writes <out>/imessage-agent.app and, unless --no-package, a .dmg, a .zip and SHA256SUMS.txt
+// Writes <out>/Messages Agent.app and, unless --no-package, a .dmg, a .zip and SHA256SUMS.txt
 // for a GitHub release. Needs macOS with Apple's Command Line Tools (Swift and clang), and
 // downloads the pinned Node release once, checking its SHA-256.
 //
@@ -28,8 +28,9 @@ const NODE = {
   },
 };
 const APP_ID = 'com.imessage-agent-mcp.app';
+const APP_NAME = 'Messages Agent';
 /** The disk image window, in points, matching app/dmg/make-background.swift. Height includes the title bar. */
-const DMG_VOLUME = 'imessage-agent';
+const DMG_VOLUME = 'Messages Agent';
 /** Alias record tags (Carbon's Alias Manager) that are safe to publish: names and paths inside the image. */
 const ALIAS_TAGS = new Set([0, 1, 2, 14, 15, 16, 17, 18]);
 const CARBON_PATH_TAG = 2;
@@ -55,7 +56,7 @@ const step = (text) => console.log(`• ${text}`);
 
 if (process.platform !== 'darwin') throw new Error('The Mac app can only be built on macOS.');
 
-const app = path.join(out, 'imessage-agent.app');
+const app = path.join(out, `${APP_NAME}.app`);
 const contents = path.join(app, 'Contents');
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'imessage-agent-build-'));
 fs.rmSync(app, { recursive: true, force: true });
@@ -97,7 +98,7 @@ try {
   run('/usr/bin/iconutil', ['-c', 'icns', path.join(work, 'AppIcon.iconset'), '-o', path.join(contents, 'Resources/AppIcon.icns')]);
 
   step('Reader (the only part that gets Full Disk Access)');
-  compileReader(path.join(root, 'helper/reader.c'), path.join(contents, 'Helpers/imessage-agent-reader.app'), archs.flatMap((a) => ['-arch', a]), path.join(contents, 'Resources/AppIcon.icns'));
+  compileReader(path.join(root, 'helper/reader.c'), path.join(contents, 'Helpers/Messages Agent Reader.app'), archs.flatMap((a) => ['-arch', a]), path.join(contents, 'Resources/AppIcon.icns'));
 
   step('Server source and its dependencies');
   const res = path.join(contents, 'Resources/app');
@@ -122,8 +123,8 @@ try {
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key><string>${APP_ID}</string>
-  <key>CFBundleName</key><string>imessage-agent</string>
-  <key>CFBundleDisplayName</key><string>imessage-agent</string>
+  <key>CFBundleName</key><string>${APP_NAME}</string>
+  <key>CFBundleDisplayName</key><string>${APP_NAME}</string>
   <key>CFBundleExecutable</key><string>imessage-agent</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -144,7 +145,7 @@ try {
 
   if (!args.includes('--no-package')) {
     step('Packaging');
-    const name = `imessage-agent-${version}`;
+    const name = `${APP_NAME.replace(/ /g, '-')}-${version}`;
     const dmg = path.join(out, `${name}.dmg`);
     const zip = path.join(out, `${name}.zip`);
     fs.rmSync(dmg, { force: true });
@@ -173,7 +174,7 @@ try {
 function buildDmg(dmg) {
   const staging = path.join(work, 'dmg');
   fs.mkdirSync(path.join(staging, '.background'), { recursive: true });
-  run('/usr/bin/ditto', [app, path.join(staging, 'imessage-agent.app')]);
+  run('/usr/bin/ditto', [app, path.join(staging, `${APP_NAME}.app`)]);
   fs.symlinkSync('/Applications', path.join(staging, 'Applications'));
   const bgTool = path.join(work, 'make-background');
   run('/usr/bin/swiftc', ['-O', '-target', `${native}-apple-macos${MIN_MACOS}`, path.join(root, 'app/dmg/make-background.swift'), '-o', bgTool]);
@@ -205,7 +206,7 @@ function buildDmg(dmg) {
       set icon size of opts to ${iconSize}
       set text size of opts to 13
       set background picture of opts to file ".background:background.tiff"
-      set position of item "imessage-agent.app" of container window to {${appAt.join(', ')}}
+      set position of item "${APP_NAME}.app" of container window to {${appAt.join(', ')}}
       set position of item "Applications" of container window to {${applications.join(', ')}}
       close
       open
@@ -256,12 +257,12 @@ end run`;
   // Check the result: the layout, the background and the app all made it in, and nothing about this Mac did.
   const check = attach(dmg, ['-readonly', '-nobrowse', '-noautoopen']);
   try {
-    for (const f of ['.DS_Store', '.background/background.tiff', '.VolumeIcon.icns', 'imessage-agent.app/Contents/Info.plist']) {
+    for (const f of ['.DS_Store', '.background/background.tiff', '.VolumeIcon.icns', `${APP_NAME}.app/Contents/Info.plist`]) {
       if (!fs.existsSync(path.join(check.mount, f))) throw new Error(`the disk image is missing ${f}`);
     }
     if (fs.readlinkSync(path.join(check.mount, 'Applications')) !== '/Applications') throw new Error('the disk image has no Applications link');
     assertLayoutIsClean(fs.readFileSync(path.join(check.mount, '.DS_Store')), layoutName);
-    run('/usr/bin/codesign', ['--verify', '--deep', '--strict', path.join(check.mount, 'imessage-agent.app')]);
+    run('/usr/bin/codesign', ['--verify', '--deep', '--strict', path.join(check.mount, `${APP_NAME}.app`)]);
   } finally {
     detach(check.device);
   }
@@ -386,7 +387,7 @@ function cleanLayout(buf, layoutName) {
     { name: '.', code: 'bwsp', type: 'blob', value: blob(plistOf(browser)) },
     { name: '.', code: 'icvp', type: 'blob', value: blob(plistOf(options, { backgroundImageAlias: cleanAlias(alias, layoutName) })) },
     { name: '.', code: 'vSrn', type: 'long', value: Buffer.from([0, 0, 0, 1]) },
-    ...records.filter((r) => r.code === 'Iloc' && ['imessage-agent.app', 'Applications'].includes(r.name)),
+    ...records.filter((r) => r.code === 'Iloc' && [`${APP_NAME}.app`, 'Applications'].includes(r.name)),
   ];
   if (kept.filter((r) => r.code === 'Iloc').length !== 2) throw new Error("Finder didn't save the icon positions");
   return writeDsStore(kept);
@@ -394,7 +395,7 @@ function cleanLayout(buf, layoutName) {
 
 /** Fails if the layout holds anything beyond what cleanLayout keeps, or anything about this Mac. */
 function assertLayoutIsClean(buf, layoutName) {
-  const allowed = new Set(['.:bwsp', '.:icvp', '.:vSrn', 'imessage-agent.app:Iloc', 'Applications:Iloc']);
+  const allowed = new Set(['.:bwsp', '.:icvp', '.:vSrn', `${APP_NAME}.app:Iloc`, 'Applications:Iloc']);
   const extra = readDsStore(buf).filter((r) => !allowed.has(`${r.name}:${r.code}`));
   if (extra.length) throw new Error(`the disk image layout has unexpected records: ${extra.map((r) => `${r.name}:${r.code}`).join(', ')}`);
   const text = buf.toString('latin1') + Buffer.from(buf).swap16().toString('utf16le');

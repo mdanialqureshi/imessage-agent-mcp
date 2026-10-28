@@ -52,9 +52,9 @@ enum Previews {
     """
     {"mode":"app","version":"0.2.0","install":{"state":"\(installed)","program":\(installed == "other" ? "\"/Users/you/imessage-agent-mcp/src/cli.ts\"" : "null")},
      "service":{"running":\(installed != "none")},
-     "reader":{"path":"/Applications/imessage-agent.app/Contents/Helpers/imessage-agent-reader.app","valid":true,"access":"\(access)"\(access == "ok" ? ",\"messages\":48213,\"contacts\":512" : "")},
+     "reader":{"path":"/Applications/Messages Agent.app/Contents/Helpers/Messages Agent Reader.app","valid":true,"access":"\(access)"\(access == "ok" ? ",\"messages\":48213,\"contacts\":512" : "")},
      "interpreter":"claude","items":{"open":7,"lastInterpretedAt":null},
-     "callCommand":"/Applications/imessage-agent.app/Contents/Helpers/node /Applications/imessage-agent.app/Contents/Resources/app/src/cli.ts call",
+     "callCommand":"'/Applications/Messages Agent.app/Contents/Helpers/node' '/Applications/Messages Agent.app/Contents/Resources/app/src/cli.ts' call",
      "config":{"autoInterpretMinutes":120,"firstRunLookbackDays":7,"privateContacts":["Sam Example"]},
      "interpreters":[{"name":"claude","ok":\(interpreterOK),"detail":"\(interpreterOK ? "signed in with a Claude plan" : "not installed")"},{"name":"codex","ok":false,"detail":"not installed"}],
      "apps":[{"id":"chatgpt","name":"ChatGPT desktop app & Codex (for Dot)","installed":true,"connected":\(connected)},

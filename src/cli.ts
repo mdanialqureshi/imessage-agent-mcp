@@ -10,7 +10,7 @@ import { interpretNow } from './interpret/run.ts';
 import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
 import { Conversations } from './messages/conversations.ts';
-import { assertOnlyYoursToChange, CLI_READER_APP, installReader, READER_LABEL, readerApp, readerBinary, readerCdHash, readerStatus, STALE_MS } from './messages/mirror.ts';
+import { assertOnlyYoursToChange, CLI_READER_APP, installReader, LEGACY_CLI_READER_APP, READER_LABEL, readerApp, readerBinary, readerCdHash, readerStatus, STALE_MS } from './messages/mirror.ts';
 import { APPS, which } from './apps.ts';
 import { bridge, callTool, type ServiceHealth, serviceHealth } from './bridge.ts';
 import { serveSocket, socketPath } from './server.ts';
@@ -48,17 +48,17 @@ const nodePath = () => (appBundle ? process.execPath : (which('node') ?? process
 
 function fdaHelp(): string {
   const find = appBundle
-    ? `  2. Open imessage-agent and drag imessage-agent-reader from its setup window into the list,
+    ? `  2. Open Messages Agent and drag Messages Agent Reader from its setup window into the list,
      or click +, press ⌘⇧G, paste the path below and click Open:
      ${readerApp()}`
-    : `  2. Drag in imessage-agent-reader from the Applications folder in your home folder,
-     or click +, press ⌘⇧H, open Applications and choose imessage-agent-reader.
+    : `  2. Drag in Messages Agent Reader from the Applications folder in your home folder,
+     or click +, press ⌘⇧H, open Applications and choose Messages Agent Reader.
      (It's ${readerApp()})`;
-  return `Give imessage-agent's reader Full Disk Access (macOS requires you to do this yourself):
+  return `Give Messages Agent's reader Full Disk Access (macOS requires you to do this yourself):
   1. System Settings → Privacy & Security → Full Disk Access
 ${find}
-  3. Make sure its switch is on. If there's an older imessage-agent-reader entry, remove it.
-  The reader only copies Messages and Contacts into imessage-agent's private folder; it takes no
+  3. Make sure its switch is on. If there's an older Messages Agent Reader or imessage-agent-reader entry, remove it.
+  The reader only copies Messages and Contacts into Messages Agent's private folder; it takes no
   input and can't be pointed at anything else. Node, your terminal and your apps don't need access.
   If you gave node Full Disk Access for this earlier, you can turn that off.`;
 }
@@ -187,7 +187,7 @@ async function setup(): Promise<void> {
     if (!flag('no-open')) {
       const pane = spawnSync('/usr/bin/open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles']).status === 0;
       const shown = spawnSync('/usr/bin/open', ['-R', readerApp()]).status === 0; // Inside the app, Finder opens its package.
-      if (pane && shown) console.log('   Opened Full Disk Access in System Settings and showed imessage-agent-reader in Finder: drag it into the list.');
+      if (pane && shown) console.log('   Opened Full Disk Access in System Settings and showed Messages Agent Reader in Finder: drag it into the list.');
     }
     if (process.stdout.isTTY && !flag('no-wait')) {
       console.log('\n   Waiting for access (Ctrl-C to finish later with: node src/cli.ts doctor)…');
@@ -237,7 +237,7 @@ function uninstall(): void {
     fs.rmSync(paths.stateDir, { recursive: true, force: true });
     console.log(`Deleted ${paths.stateDir}`);
   } else console.log(`Kept your items in ${paths.stateDir} (add --delete-data to remove them).`);
-  console.log(`You can also remove imessage-agent-reader from Full Disk Access in System Settings.${appBundle ? ' Then move imessage-agent to the Trash.' : ''}`);
+  console.log(`You can also remove Messages Agent Reader from Full Disk Access in System Settings.${appBundle ? ' Then move Messages Agent to the Trash.' : ''}`);
 }
 
 /**
@@ -540,7 +540,7 @@ function uninstallService(): void {
   }
   fs.rmSync(socketPath(), { force: true });
   for (const name of ['mirror', 'reader-status', 'reader-granted', 'reader.sha256', 'reader-build.app', 'bin']) fs.rmSync(path.join(paths.stateDir, name), { recursive: true, force: true });
-  fs.rmSync(CLI_READER_APP, { recursive: true, force: true }); // The app's own reader goes when the app is deleted.
+  for (const reader of [CLI_READER_APP, LEGACY_CLI_READER_APP]) fs.rmSync(reader, { recursive: true, force: true }); // The app's own reader goes when the app is deleted.
   console.log(`Removed the background service (${LABEL}), its reader and its copy of Messages.`);
 }
 

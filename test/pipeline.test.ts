@@ -510,7 +510,7 @@ test('the reader copies Messages and Contacts privately, and only into its own f
   fs.copyFileSync(process.env.IMESSAGE_DB_PATH!, chat);
   const writer = new DatabaseSync(chat);
   writer.exec('PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE pending(x); INSERT INTO pending VALUES (1), (2);');
-  const app = path.join(home, 'imessage-agent-reader.app');
+  const app = path.join(home, 'Messages Agent Reader.app');
   compileReader(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'helper', 'reader.c'), app, ['-Werror', `-DREADER_HOME="${home}"`]);
   const bin = readerBinary(app);
   const run = (env: NodeJS.ProcessEnv = {}) => spawnSync(bin, { encoding: 'utf8', env }).status;
@@ -648,10 +648,10 @@ test("a clone's reader is rebuilt only when needed, and never into a folder othe
   const base = path.join(dir, 'install-reader');
   fs.rmSync(base, { recursive: true, force: true });
   const apps = path.join(base, 'Applications');
-  const app = path.join(apps, 'imessage-agent-reader.app');
+  const app = path.join(apps, 'Messages Agent Reader.app');
   const stateDir = path.join(base, 'state');
   // Every path is in the test folder, including the clone's reader the app mode removes.
-  const opts = { app, stateDir, inApp: false, cliReader: path.join(base, 'cli-reader.app') };
+  const opts = { app, stateDir, inApp: false, cliReader: path.join(base, 'cli-reader.app'), legacyReader: path.join(base, 'imessage-agent-reader.app') };
 
   assert.equal(installReader(source, opts), true, 'first install builds it');
   const cdhash = readerCdHash(app);
@@ -688,7 +688,7 @@ test("a clone's reader is rebuilt only when needed, and never into a folder othe
   fs.chmodSync(apps, 0o755);
   const linked = path.join(base, 'LinkedApplications');
   fs.symlinkSync(apps, linked);
-  assert.throws(() => installReader(source, { ...opts, app: path.join(linked, 'imessage-agent-reader.app') }), /folder you own/);
+  assert.throws(() => installReader(source, { ...opts, app: path.join(linked, 'Messages Agent Reader.app') }), /folder you own/);
 
   // In the Mac app, nothing is built: the bundled reader must be intact.
   assert.equal(installReader(source, { ...opts, inApp: true }), false);

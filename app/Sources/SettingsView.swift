@@ -57,7 +57,7 @@ struct SettingsView: View {
           Button("Uninstall…") { confirmUninstall = true }
         }
         if uninstalled {
-          Text("Uninstalled. Now remove imessage-agent-reader from Full Disk Access, quit this app and move it to the Trash.")
+          Text("Uninstalled. Now remove Messages Agent Reader from Full Disk Access, quit this app and move it to the Trash.")
             .foregroundStyle(.secondary)
         }
         if let problem = model.problem {
@@ -72,7 +72,7 @@ struct SettingsView: View {
     .onChange(of: model.status?.config.privateContacts) { _ in if !loadedContacts { loadContacts() } }
     .sheet(isPresented: $confirmUninstall) {
       VStack(alignment: .leading, spacing: 14) {
-        Text("Uninstall imessage-agent?").font(.headline)
+        Text("Uninstall Messages Agent?").font(.headline)
         Text("This disconnects your apps and removes the background service and its copy of Messages.")
         Toggle("Also delete my items and logs", isOn: $deleteData)
         HStack {

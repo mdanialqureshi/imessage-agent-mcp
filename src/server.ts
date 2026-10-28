@@ -314,7 +314,7 @@ export async function serveSocket(opts: { autoInterpret?: boolean } = {}): Promi
   // lstat, not exists: a dangling symlink here would otherwise redirect where the socket is made.
   const existing = fs.lstatSync(sock, { throwIfNoEntry: false });
   if (existing) {
-    if (existing.isSocket() && (await isListening(sock))) throw new Error('The imessage-agent service is already running.');
+    if (existing.isSocket() && (await isListening(sock))) throw new Error('The Messages Agent service is already running.');
     fs.rmSync(sock); // Left behind by a crash or SIGTERM.
   }
   const httpServer = http.createServer(async (req, res) => {
@@ -349,7 +349,7 @@ export async function serveSocket(opts: { autoInterpret?: boolean } = {}): Promi
   }
   fs.chmodSync(sock, 0o600);
   httpServer.on('close', () => fs.rmSync(sock, { force: true }));
-  console.error(`imessage-agent service running on this Mac only (socket ${sock}, no network port)`);
+  console.error(`Messages Agent service running on this Mac only (socket ${sock}, no network port)`);
 
   if (opts.autoInterpret !== false && config.autoInterpretMinutes > 0) {
     const intervalMs = config.autoInterpretMinutes * 60_000;

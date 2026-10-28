@@ -127,7 +127,7 @@ final class Model: ObservableObject {
 
   /// One line for the menu.
   var summary: String {
-    if appHasFullDiskAccess { return "Switch off Full Disk Access for imessage-agent" }
+    if appHasFullDiskAccess { return "Switch off Full Disk Access for Messages Agent" }
     guard let s = status else { return "Checking…" }
     if !s.serviceReady { return "Not set up yet" }
     switch s.reader.access {

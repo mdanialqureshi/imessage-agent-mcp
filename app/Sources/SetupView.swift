@@ -33,7 +33,7 @@ struct SetupView: View {
     HStack(spacing: 14) {
       Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 52, height: 52)
       VStack(alignment: .leading, spacing: 3) {
-        Text("Set up imessage-agent").font(.title2.bold())
+        Text("Set up Messages Agent").font(.title2.bold())
         Text("Everything runs on this Mac. There's no server, sign-up or open network port.")
           .foregroundStyle(.secondary)
       }
@@ -93,8 +93,8 @@ struct AppHasAccess: View {
   @EnvironmentObject var model: Model
 
   var body: some View {
-    Step(number: 1, title: "Switch off Full Disk Access for imessage-agent", done: false) {
-      Text("imessage-agent itself was given Full Disk Access. It doesn't need it, and while it has it, it won't run anything. In System Settings, switch off **imessage-agent** (or remove it). Only **imessage-agent-reader** needs access.")
+    Step(number: 1, title: "Switch off Full Disk Access for Messages Agent", done: false) {
+      Text("Messages Agent itself was given Full Disk Access. It doesn't need it, and while it has it, it won't run anything. In System Settings, switch off **Messages Agent** (or remove it). Only **Messages Agent Reader** needs access.")
         .fixedSize(horizontal: false, vertical: true)
       HStack {
         Button("Open Full Disk Access") {
@@ -115,8 +115,8 @@ struct AppHasAccess: View {
 
 struct MoveFirst: View {
   var body: some View {
-    Step(number: 1, title: "Move imessage-agent to your Applications folder", done: false) {
-      Text("It's running from a temporary location (a disk image or the Downloads folder), so it can't install its background service. Quit it, drag imessage-agent into Applications, then open it from there.")
+    Step(number: 1, title: "Move Messages Agent to your Applications folder", done: false) {
+      Text("It's running from a temporary location (a disk image or the Downloads folder), so it can't install its background service. Quit it, drag Messages Agent into Applications, then open it from there.")
       Button("Quit") { NSApp.terminate(nil) }
     }
   }
@@ -241,7 +241,7 @@ struct AccessStep: View {
     let s = model.status
     let ok = s?.reader.access == "ok"
     Step(number: 3, title: "Let the reader see your messages", done: ok) {
-      Text("macOS keeps Messages in a protected folder that only programs with **Full Disk Access** can read. Only **imessage-agent-reader**, a tiny program inside this app, gets it. It just copies Messages and Contacts into a private folder for the service. This app, Node and your other apps never get it.")
+      Text("macOS keeps Messages in a protected folder that only programs with **Full Disk Access** can read. Only **Messages Agent Reader**, a tiny program inside this app, gets it. It just copies Messages and Contacts into a private folder for the service. This app, Node and your other apps never get it.")
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
       if ok {
@@ -251,7 +251,7 @@ struct AccessStep: View {
         Text("Finish step 2 first.").font(.callout).foregroundStyle(.secondary)
       } else {
         if s?.reader.changedSinceGrant ?? false {
-          Label("The reader changed since you gave it access, so macOS switched access off. If you just updated imessage-agent, give the new reader access. If you didn't, don't: download the app again instead.", systemImage: "exclamationmark.triangle.fill")
+          Label("The reader changed since you gave it access, so macOS switched access off. If you just updated Messages Agent, give the new reader access. If you didn't, don't: download the app again instead.", systemImage: "exclamationmark.triangle.fill")
             .foregroundStyle(.orange)
             .font(.callout)
             .fixedSize(horizontal: false, vertical: true)
@@ -262,7 +262,7 @@ struct AccessStep: View {
             Text("1. Click **Open Full Disk Access**.")
             Text("2. Drag the reader on the left into the list.")
             Text("3. Switch it on. macOS may ask for your password.")
-            Text("If there's an older **imessage-agent-reader** entry, remove it.").foregroundStyle(.secondary)
+            Text("If there's an older reader in the list, remove it.").foregroundStyle(.secondary)
             HStack {
               Button("Open Full Disk Access") {
                 NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
@@ -288,7 +288,7 @@ struct AccessStep: View {
         }
       }
       if model.appHasFullDiskAccess {
-        Label("imessage-agent itself has Full Disk Access. It doesn't need it: switch it off and keep only imessage-agent-reader.", systemImage: "exclamationmark.triangle.fill")
+        Label("Messages Agent itself has Full Disk Access. It doesn't need it: switch it off and keep only Messages Agent Reader.", systemImage: "exclamationmark.triangle.fill")
           .foregroundStyle(.orange)
           .font(.callout)
       }
@@ -301,7 +301,7 @@ struct ReaderTile: View {
   var body: some View {
     VStack(spacing: 6) {
       Image(nsImage: NSWorkspace.shared.icon(forFile: Backend.reader.path)).resizable().frame(width: 64, height: 64)
-      Text("imessage-agent-reader").font(.caption.bold())
+      Text("Messages Agent Reader").font(.caption.bold())
       Text("Drag me").font(.caption2).foregroundStyle(.secondary)
     }
     .padding(12)

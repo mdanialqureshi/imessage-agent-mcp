@@ -33,7 +33,7 @@ jobs:
       - name: Build the app (Apple silicon and Intel)
         run: node scripts/build-app.mjs
       - name: Test the build
-        run: IMESSAGE_AGENT_APP=dist/imessage-agent.app node --test test/app.test.ts
+        run: IMESSAGE_AGENT_APP='dist/Messages Agent.app' node --test test/app.test.ts
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release
@@ -80,4 +80,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" dist/*.dmg dist/*.zip dist/SHA256SUMS.txt \
-            --title "imessage-agent $GITHUB_REF_NAME" --notes-file .github/release-notes.md
+            --title "Messages Agent $GITHUB_REF_NAME" --notes-file .github/release-notes.md

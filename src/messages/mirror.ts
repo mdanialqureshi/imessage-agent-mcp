@@ -6,7 +6,7 @@ import path from 'node:path';
 import { appBundle, paths } from '../config.ts';
 
 /**
- * The background service never opens Messages or Contacts itself. imessage-agent-reader
+ * The background service never opens Messages or Contacts itself. Messages Agent Reader
  * (helper/reader.c) is a separate launchd job and the only thing holding Full Disk Access;
  * it copies both databases into <state>/mirror, and the service reads those copies.
  */
@@ -20,7 +20,7 @@ export const usingMirror = () => process.env.IMESSAGE_AGENT_MIRROR === '1';
  * hidden). A new build has a new signature, so macOS asks for access again.
  */
 export const readerApp = () =>
-  appBundle ? path.join(appBundle, 'Contents/Helpers/imessage-agent-reader.app') : path.join(os.homedir(), 'Applications', 'imessage-agent-reader.app');
+  appBundle ? path.join(appBundle, 'Contents/Helpers/Messages Agent Reader.app') : path.join(os.homedir(), 'Applications', 'Messages Agent Reader.app');
 export const readerBinary = (app = readerApp()) => path.join(app, 'Contents/MacOS/imessage-agent-reader');
 
 /**
@@ -39,7 +39,7 @@ export const READER_INFO = `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key><string>${READER_LABEL}</string>
-  <key>CFBundleName</key><string>imessage-agent-reader</string>
+  <key>CFBundleName</key><string>Messages Agent Reader</string>
   <key>CFBundleExecutable</key><string>imessage-agent-reader</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -82,7 +82,9 @@ export function readerCdHash(app = readerApp()): string | null {
 }
 
 /** A clone's reader, which the Mac app replaces with its own. */
-export const CLI_READER_APP = path.join(os.homedir(), 'Applications', 'imessage-agent-reader.app');
+export const CLI_READER_APP = path.join(os.homedir(), 'Applications', 'Messages Agent Reader.app');
+/** Where a clone built the reader before it was renamed; removed when the new one is built. */
+export const LEGACY_CLI_READER_APP = path.join(os.homedir(), 'Applications', 'imessage-agent-reader.app');
 
 /**
  * Makes sure the reader is in place. The app ships its own, so a reader left by a clone is
@@ -92,11 +94,13 @@ export const CLI_READER_APP = path.join(os.homedir(), 'Applications', 'imessage-
  */
 export function installReader(
   source: string,
-  { app = readerApp(), stateDir = paths.stateDir, inApp = Boolean(appBundle), cliReader = CLI_READER_APP } = {},
+  { app = readerApp(), stateDir = paths.stateDir, inApp = Boolean(appBundle), cliReader = CLI_READER_APP, legacyReader = LEGACY_CLI_READER_APP } = {},
 ): boolean {
-  fs.rmSync(path.join(stateDir, 'bin'), { recursive: true, force: true }); // Where older versions kept it.
+  // Where older versions kept it.
+  fs.rmSync(path.join(stateDir, 'bin'), { recursive: true, force: true });
+  fs.rmSync(legacyReader, { recursive: true, force: true });
   if (inApp) {
-    if (!readerCdHash(app)) throw new Error('the reader inside imessage-agent.app is missing or damaged; download the app again');
+    if (!readerCdHash(app)) throw new Error('the reader inside Messages Agent.app is missing or damaged; download the app again');
     fs.rmSync(cliReader, { recursive: true, force: true });
     return false;
   }
@@ -229,7 +233,7 @@ export function readerStatus(): ReaderStatus | null {
 }
 
 export const NEEDS_ACCESS =
-  "The imessage-agent service on the user's Mac can't read Messages yet: its reader needs Full Disk Access " +
+  "The Messages Agent service on the user's Mac can't read Messages yet: its reader needs Full Disk Access " +
   '(run `node src/cli.ts doctor` on the Mac).';
 
 /** A copy older than this means the reader has stopped answering, so it isn't used. */
@@ -239,10 +243,10 @@ export const STALE_MS = 10 * 60_000;
 export function mirrorProblem(status: ReaderStatus | null): string | null {
   if (status?.ok) {
     if (Date.now() - status.at < STALE_MS) return null;
-    return "The imessage-agent service's copy of Messages is out of date because its reader isn't answering (run `node src/cli.ts doctor` on the Mac).";
+    return "The Messages Agent service's copy of Messages is out of date because its reader isn't answering (run `node src/cli.ts doctor` on the Mac).";
   }
   if (!status || status.error === 'EPERM') return NEEDS_ACCESS;
-  return "The imessage-agent service on the user's Mac couldn't copy Messages just now. Try again in a minute.";
+  return "The Messages Agent service on the user's Mac couldn't copy Messages just now. Try again in a minute.";
 }
 
 const kickstart = () =>

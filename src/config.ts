@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 export type InterpreterName = 'codex' | 'claude';
 
 /**
- * The Mac app this copy runs inside (imessage-agent.app, which bundles Node, this source and
+ * The Mac app this copy runs inside (Messages Agent.app, which bundles Node, this source and
  * a prebuilt reader), or null when it runs from a clone of the repo.
  */
 export const appBundle = /^(\/.+\.app)\/Contents\/Resources\/app\/src\/config\.ts$/.exec(fileURLToPath(import.meta.url))?.[1] ?? null;
@@ -45,7 +45,7 @@ const defaults: Config = {
 const stateDir =
   process.env.IMESSAGE_AGENT_STATE_DIR ?? path.join(os.homedir(), 'Library/Application Support/imessage-agent-mcp');
 /**
- * The background service reads copies made by imessage-agent-reader (helper/reader.c), the
+ * The background service reads copies made by Messages Agent Reader (helper/reader.c), the
  * only part holding Full Disk Access; its launchd job sets IMESSAGE_AGENT_MIRROR=1.
  * Terminal commands read the live files with the terminal's own access.
  */
