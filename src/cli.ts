@@ -170,7 +170,9 @@ async function setup(): Promise<void> {
   }
 
   console.log('\n2. Background service (runs on this Mac at login; Unix socket only, no network port)');
+  let service: string;
   try {
+    service = checkedService(); // Before the reader is touched, so a failed check keeps the old one.
     if (buildReader()) console.log(`   Installed its reader, the only part that will hold Full Disk Access: ${readerApp()}`);
   } catch (err: any) {
     console.log(`   ❌ ${err.message.split('\n')[0]}`);
@@ -178,7 +180,7 @@ async function setup(): Promise<void> {
     return;
   }
   try {
-    installService();
+    installService(service);
   } catch (err: any) {
     console.log(`   ❌ ${err.message.split('\n')[0]}`);
     process.exitCode = 1;
@@ -576,11 +578,14 @@ function setServiceRunning(on: boolean): void {
   if (installedProgram() !== cliPath) return;
   const jobs = [[READER_LABEL, readerPlistPath], [LABEL, plistPath]];
   if (on) {
-    // Each time the app opens, its own reader goes back in place if the copy went missing or changed.
-    try {
-      buildReader();
-    } catch (err: any) {
-      console.error(err.message);
+    // Each time the app opens, its own reader goes back in place if the copy went missing or
+    // changed. (Never a rebuild for a clone: that would switch Full Disk Access off.)
+    if (appBundle) {
+      try {
+        buildReader();
+      } catch (err: any) {
+        console.error(err.message);
+      }
     }
     for (const [label, file] of jobs) {
       launchctl('enable', `${domain()}/${label}`);
