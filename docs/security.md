@@ -11,7 +11,7 @@ imessage-agent-mcp reads your private message history, so this page spells out e
 | Update check and download (Mac app) | `api.github.com` and `github.com`; the request carries only the app's version | Once a day unless switched off in Settings; downloads only when you click **Install Update** |
 | Everything else: your databases, the item list, logs | Nowhere | Never |
 
-Verification codes, short-code senders (banks, 2FA, deliveries) and anyone in `privateContacts` are dropped on the Mac before any model sees them.
+Verification codes (also when split like `123-456`, and in common languages), business senders (short codes, Apple business chats and named senders like a bank's) and anyone in `privateContacts` are dropped on the Mac before any model sees them. Marking someone private also removes the items already noted from their chats, at the next run. The filter is a pattern match, so an unusually worded code can still get through.
 
 ## Local only
 
@@ -76,10 +76,21 @@ Message text is written by other people, so the interpreter is a pure text-in, J
 
 ## Prompt injection reaches your agent too
 
-Tool results contain text other people wrote. The tool descriptions, the brief and the `call` command all tell agents to treat it as data, but agents like Codex, Claude Code and Dot have their own tools (shell, files, web). Keep their approval prompts on, and don't let an agent act on instructions that appear in a message. If Dot asks to run a command, approve only the exact `call` command setup shows (`…/node …/cli.ts call`), not shell access in general.
+Tool results contain text other people wrote. The tool descriptions, the brief and the `call` command all tell agents to treat it as data, but agents like Codex, Claude Code and Dot have their own tools (shell, files, web). Anyone can text you, so assume a message may be written to steer your agent.
+
+- **Keep your agent's approval prompts on.** Don't connect an agent that runs commands without asking (Claude Code's `--dangerously-skip-permissions`, Codex's full-access or "yolo" modes), especially for the scheduled check-ins nobody watches.
+- **Strangers' words stay out of the brief.** Items from chats with anyone not in your Contacts are marked "not in Contacts", and the brief leaves out their quotes; `get_item` shows them, labelled, when someone looks on purpose. Invisible characters (zero-width, direction overrides, Unicode tags) are removed from all message text, so nothing can hide in it.
+- **Limits.** A stranger's chat costs its own interpreter call, so at most 20 are read per run, and `refresh` reads again at most once a minute.
+- Don't let an agent act on instructions that appear in a message. If Dot asks to run a command, approve only the exact `call` command setup shows (`…/node …/cli.ts call`), not shell access in general.
+
+## Clones and updates
+
+`node src/cli.ts update` moves a clone to the newest release tag on `master`. Tags aren't signed, so this trusts the GitHub repo itself (the Mac app's updates are checked against the release key instead). To check before you run it, read what changed: `git fetch --tags && git log HEAD..$(git describe --tags --abbrev=0 origin/master)`.
 
 ## Threat model
 
 This protects against other people (through the messages they send you), the network, web pages, and other macOS users.
+
+The reader's hardened runtime (no injected libraries or debuggers) is enforced by macOS only while System Integrity Protection is on, as it is by default.
 
 It **can't** protect against malware already running as *your* user. That could talk to the socket, read the state files (including the copy of Messages), or run the reader. It would get Messages and Contacts, but not the rest of what Full Disk Access covers.

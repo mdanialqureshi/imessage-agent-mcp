@@ -1,4 +1,3 @@
-# sha256  path, for images that were looked at: synthetic data only, no metadata (see check-public-safety.mjs).
 815f9a9c42e1319e0a78282139a54c5a8f232b4fbc1ae91a4f2a1e4e67090949  docs/logo.png
-c2a3352d7f3e01f9b2cd56d092f4cbc4dd2aa5365a04273918f7194584810b8e  docs/setup.png
-daf87e9d171b026b3a5b57d1891f904f1739e677dd82516ad0017b9bc714e153  docs/setup-dark.png
+c88b75f988c1783b36c1affc510124369e9cde119cdc35824513c13813fed32a  docs/setup.png
+b4928a5028aef9c7482cf650f28d0104e1fac9906c15a5a1b6e343400090ee0a  docs/setup-dark.png

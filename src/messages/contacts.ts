@@ -10,10 +10,14 @@ export function handleKey(handle: string): string {
   return digits.length > 10 ? digits.slice(-10) : digits;
 }
 
-/** SMS short codes (banks, 2FA, deliveries) are 3–8 digits with no email. */
+/**
+ * Business senders (banks, 2FA, deliveries): SMS short codes of 3–8 digits, Apple's business
+ * chats, and senders with a name instead of a number ("Google", "HSBC-UK").
+ */
 export function isShortCode(handle: string): boolean {
   if (handle.includes('@')) return false;
   if (handle.startsWith('urn:biz:')) return true;
+  if (!/^[+\d(]/.test(handle.trim())) return true;
   const digits = handle.replace(/\D/g, '');
   return digits.length > 0 && digits.length < 9;
 }

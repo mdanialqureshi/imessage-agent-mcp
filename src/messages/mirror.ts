@@ -134,7 +134,7 @@ export function installReader(
     compileReader(source, tmp);
     const fresh = readerCdHash(tmp);
     if (!fresh) throw new Error("the reader's signature didn't verify after building it");
-    fs.writeFileSync(stamp, `${hash} ${fresh}\n`);
+    fs.writeFileSync(stamp, `${hash} ${fresh}\n`, { mode: 0o600 });
   });
 }
 
@@ -230,19 +230,41 @@ function pathsOnTheWay(file: string): string[] {
   throw new Error(`${file} goes through too many links`);
 }
 
+/**
+ * The code the service loads (everything under each of `roots`) must be only yours to change,
+ * like the program itself: other accounts can't own, write to or (by access-control list) change
+ * any file or folder in it.
+ */
+export function assertTreeOnlyYoursToChange(roots: string[]): void {
+  const walk = (p: string) => {
+    checkModes(p, fs.lstatSync(p));
+    if (fs.lstatSync(p).isDirectory()) for (const name of fs.readdirSync(p)) walk(path.join(p, name));
+  };
+  for (const root of roots) {
+    assertOnlyYoursToChange(root);
+    walk(root);
+    if (process.platform === 'darwin' && aclLetsOthersWrite(spawnSync('/bin/ls', ['-leR', root], { encoding: 'utf8', maxBuffer: 64 << 20 }).stdout ?? '')) {
+      throw new Error(`Something in ${root} could be changed by another account on this Mac (an access-control list lets others write to it), and the background service would run it as you.`);
+    }
+  }
+}
+
+function checkModes(p: string, st: fs.Stats): void {
+  // Group write is fine for wheel and admin (like /Applications or Homebrew's folders): their members can change anything anyway.
+  const systemGroupWrite = st.gid === 0 || st.gid === 80;
+  if ((st.uid !== process.getuid!() && st.uid !== 0) || st.mode & 0o002 || (st.mode & 0o020 && !systemGroupWrite)) {
+    throw new Error(`${p} could be changed by another account on this Mac, and the background service would run it as you. Install it somewhere only you (or the system) can change.`);
+  }
+}
+
 function checkChain(start: string): void {
-  const me = process.getuid!();
   let p = start;
   for (;;) {
     const st = fs.lstatSync(p);
     if (process.platform === 'darwin' && sharedByAcl(p)) {
       throw new Error(`${p} could be changed by another account on this Mac (an access-control list lets others write to it), and the background service would run it as you.`);
     }
-    // Group write is fine for wheel and admin (like /Applications or Homebrew's folders): their members can change anything anyway.
-    const systemGroupWrite = st.gid === 0 || st.gid === 80;
-    if ((st.uid !== me && st.uid !== 0) || st.mode & 0o002 || (st.mode & 0o020 && !systemGroupWrite)) {
-      throw new Error(`${p} could be changed by another account on this Mac, and the background service would run it as you. Install it somewhere only you (or the system) can change.`);
-    }
+    checkModes(p, st);
     if (p === '/') return;
     p = path.dirname(p);
   }
@@ -253,12 +275,15 @@ const ACL_WRITES = new Set(['write', 'append', 'writeextattr', 'writesecurity', 
 
 /** Whether an access-control list lets anyone else write to, add to or delete from p. */
 function sharedByAcl(p: string): boolean {
-  const res = spawnSync('/bin/ls', ['-led', p], { encoding: 'utf8' });
+  return aclLetsOthersWrite((spawnSync('/bin/ls', ['-led', p], { encoding: 'utf8' }).stdout ?? '').split('\n').slice(1).join('\n'));
+}
+
+/** Whether any access-control entry in `ls -le` output lets someone else write. */
+function aclLetsOthersWrite(listing: string): boolean {
   // Like the mode bits: you, and the groups that can change the system anyway.
   const trusted = new Set([`user:${os.userInfo().username}`, 'group:admin', 'group:wheel']);
-  return (res.stdout ?? '')
+  return listing
     .split('\n')
-    .slice(1)
     .some((line) => {
       // Parsed from the end, since a directory group's name can contain spaces.
       const m = /^\s*\d+:\s+(.+?)\s+(?:inherited\s+)?allow\s+([a-z_,]+)\s*$/.exec(line);

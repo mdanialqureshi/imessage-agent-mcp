@@ -52,7 +52,9 @@ Everything runs on your Mac. There's no account, no server of ours, and nothing 
 - **New conversations** go to your own Claude or ChatGPT subscription to be interpreted.
 - **Results** your agent asks for (the brief, items, messages it searches) go to that agent.
 
-One-time codes, short codes and contacts you mark private are never read or sent. Only one tiny program, **Messages Agent Reader**, gets permission to read Messages, and it only copies them into a private folder. The app checks GitHub once a day for updates (nothing about you is sent; Settings turns it off). Details: [docs/security.md](docs/security.md).
+One-time codes, short codes and contacts you mark private are never read or sent. Only one tiny program, **Messages Agent Reader**, gets permission to read Messages, and it only copies them into a private folder. The app checks GitHub once a day for updates (nothing about you is sent; Settings turns it off).
+
+**Keep your agent's approval prompts on.** Anyone can text you, so a message could be written to steer your agent. Messages Agent keeps strangers' words out of the brief, but don't connect an agent that runs commands without asking. Details: [docs/security.md](docs/security.md).
 
 ## Install
 

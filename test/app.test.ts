@@ -92,6 +92,13 @@ test('nothing private or unexpected is in the bundle', { skip }, () => {
 
 test('the menu bar app runs the bundled CLI and understands its status', { skip }, () => {
   const res = spawnSync(path.join(contents, 'MacOS/imessage-agent'), ['--self-test'], { encoding: 'utf8', env: env(fakeHome()), timeout: 60_000 });
+  // Some CI machines give every program Full Disk Access; there the app must refuse to run.
+  const realHome = os.userInfo().homedir;
+  if (['Library/Messages', 'Library/Safari', 'Library/Mail'].some((f) => { try { fs.readdirSync(path.join(realHome, f)); return true; } catch { return false; } })) {
+    assert.equal(res.status, 1, res.stdout + res.stderr);
+    assert.match(res.stdout, /^self-test failed: Messages Agent itself has Full Disk Access/m);
+    return;
+  }
   assert.equal(res.status, 0, res.stdout + res.stderr);
   assert.match(res.stdout, /^self-test ok: .* mode app, reader signed, install none/m);
 });

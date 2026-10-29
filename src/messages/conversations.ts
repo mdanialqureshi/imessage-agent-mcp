@@ -18,10 +18,21 @@ export interface Window {
 const MAX_MESSAGE_CHARS = 2000;
 const MAX_WINDOW_CHARS = 40_000;
 
-const VERIFICATION_CODE = /\b(code|passcode|verification|verify|OTP|one[- ]time|2FA|security)\b/i;
+const VERIFICATION_CODE =
+  /\b(codes?|passcode|password|verification|verify|OTP|one[- ]time|2FA|MFA|security|PIN|log[- ]?in|sign[- ]?in|auth\w*|confirm\w*)\b/i;
+/** The same words in other common languages (no \b: it only knows ASCII letters). */
+const VERIFICATION_CODE_INTL =
+  /c[oó]digo|verificaci[oó]n|contraseña|senha|bestätigung|sicherheitscode|kennwort|mot de passe|vérification|codice|verifica|weryfikac|код|验证码|驗證碼|認証|確認コード|인증/i;
+
+/** A code: 4–8 digits, maybe split by spaces or dashes ("123 456", "48-29-13"). */
+const hasCode = (text: string) =>
+  (text.match(/\d+(?:[ -]\d+)*/g) ?? []).some((run) => {
+    const digits = run.replace(/\D/g, '').length;
+    return digits >= 4 && digits <= 8;
+  });
 
 export function isFilteredText(text: string): boolean {
-  return VERIFICATION_CODE.test(text) && /\b\d{4,8}\b/.test(text);
+  return (VERIFICATION_CODE.test(text) || VERIFICATION_CODE_INTL.test(text)) && hasCode(text);
 }
 
 /**

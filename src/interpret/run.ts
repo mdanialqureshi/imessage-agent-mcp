@@ -23,6 +23,8 @@ import { InterpreterUnavailable, interpreter, type RawOp, ToolUseAttempt } from 
 const BATCH_CHARS = 60_000;
 /** A chat whose batch fails this many runs in a row is skipped, so it can't stall every run. */
 const MAX_CHAT_FAILURES = 3;
+/** Each stranger's chat costs its own interpreter call, so a flood of new senders can't use up the plan. */
+const MAX_STRANGER_CHATS = 20;
 
 const OPS = new Set(['create', 'update', 'done', 'cancel']);
 const PRECISIONS = new Set(['exact', 'part_of_day', 'day', 'week', 'none']);
@@ -145,6 +147,7 @@ function toFields(op: RawOp, w: Window, conv: Conversations): ItemFields {
     suggestedAction: op.suggested_action,
     missingDetails: op.missing_details,
     evidence,
+    unknownSender: conv.hasUnknownSender(w.chat),
   };
 }
 
@@ -213,6 +216,13 @@ export async function interpretNow(
   const runId = opts.dryRun ? null : store.startRun(config.interpreter);
   try {
     const conv = new Conversations(db, Contacts.load(), config);
+    // Someone marked private later: what was already noted from their chats goes too.
+    if (!opts.dryRun) {
+      for (const chatId of store.chatIdsWithItems()) {
+        const chat = db.chat(chatId);
+        if (chat && conv.isExcluded(chat)) store.deleteItemsForChat(chatId);
+      }
+    }
     const lastRowid = Number(store.getMeta('last_rowid') ?? 0);
     const lookbackDays = lastRowid ? 30 : config.firstRunLookbackDays;
     const fresh = db.newMessages(lastRowid, new Date(now.getTime() - lookbackDays * 86400_000));
@@ -233,7 +243,12 @@ export async function interpretNow(
     dbOpen = false;
 
     const failures: Record<string, number> = JSON.parse(store.getMeta('chat_failures') ?? '{}');
+    let strangers = 0;
     const runnable = all.filter((w) => {
+      if (isolated.has(w.ref) && ++strangers > MAX_STRANGER_CHATS) {
+        result.skippedChats++;
+        return false;
+      }
       if ((failures[w.chat.id] ?? 0) < MAX_CHAT_FAILURES) return true;
       delete failures[w.chat.id];
       result.skippedChats++;

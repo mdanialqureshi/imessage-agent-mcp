@@ -11,7 +11,7 @@ import { interpretNow } from './interpret/run.ts';
 import { ChatDb, sweepSnapshots } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
 import { Conversations } from './messages/conversations.ts';
-import { assertOnlyYoursToChange, CLI_READER_APP, installReader, LEGACY_CLI_READER_APP, READER_LABEL, removeOldReaders, removeReaderBundle, readerApp, readerBinary, readerCdHash, readerInstalled, shippedReader, readerStatus, STALE_MS } from './messages/mirror.ts';
+import { assertOnlyYoursToChange, assertTreeOnlyYoursToChange, CLI_READER_APP, installReader, LEGACY_CLI_READER_APP, READER_LABEL, removeOldReaders, removeReaderBundle, readerApp, readerBinary, readerCdHash, readerInstalled, shippedReader, readerStatus, STALE_MS } from './messages/mirror.ts';
 import { APPS, which } from './apps.ts';
 import { bridge, callTool, type ServiceHealth, serviceHealth } from './bridge.ts';
 import { agentSocketPath, serveSocket, socketPath } from './server.ts';
@@ -618,6 +618,9 @@ function checkedService(): string {
   const env = /<key>IMESSAGE_AGENT_(?:CLAUDE|CODEX)_BIN<\/key><string>([^<]+)<\/string>/g;
   const interpreters = [...service.matchAll(env)].map((m) => m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'));
   for (const file of [process.execPath, cliPath, ...interpreters]) assertOnlyYoursToChange(file);
+  // And everything the service's code loads: its other modules and its dependencies.
+  const root = path.dirname(path.dirname(cliPath));
+  assertTreeOnlyYoursToChange(['src', 'node_modules', 'package.json'].map((f) => path.join(root, f)).filter((f) => fs.existsSync(f)));
   return service;
 }
 

@@ -80,7 +80,7 @@ Any app that can launch a local stdio MCP server works. For example, `~/.gemini/
 
 ## Not supported, by design
 
-Agents that can only reach a public HTTPS URL (and can't work through an app on your Mac) aren't supported. There's no public endpoint to give them. Please don't put one in front of the service with a tunnel. The service holds Full Disk Access to your messages.
+Agents that can only reach a public HTTPS URL (and can't work through an app on your Mac) aren't supported. There's no public endpoint to give them. Please don't put one in front of the service with a tunnel. The service can read all your messages.
 
 ## The setup message
 

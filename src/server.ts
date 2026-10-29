@@ -19,6 +19,7 @@ import { clip, oneLine } from './text.ts';
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, openWorldHint: false } as const;
 /** How long refresh waits before telling the agent to check back. */
 const REFRESH_WAIT_MS = 45_000;
+const REFRESH_MIN_GAP_MS = 60_000;
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 
@@ -136,7 +137,7 @@ export function createServer(config: Config): McpServer {
         if (!chat || conv.isExcluded(chat)) return [];
         return db.messagesBefore(item.chatId, lastEvidence + 8, context_messages ?? 20).map((m) => renderMessage(conv, m));
       });
-      return text(`${formatItem(item, { evidence: 10 })}\nStatus: ${item.status}\n\nConversation:\n${convo.join('\n')}`);
+      return text(`${formatItem(item, { evidence: 10, strangerQuotes: true })}\nStatus: ${item.status}\n\nConversation:\n${convo.join('\n')}`);
     },
   );
 
@@ -231,6 +232,11 @@ export function createServer(config: Config): McpServer {
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async () => {
+      // A refresh just finished: there's nothing new to read yet, and a looping agent can't spend the plan.
+      const last = running ? null : withStore((s) => s.lastRun());
+      if (last?.finished_at && !last.error && Date.now() - new Date(last.finished_at).getTime() < REFRESH_MIN_GAP_MS) {
+        return text('Messages were read less than a minute ago. Call get_brief.');
+      }
       const run = startInterpretation();
       const timeout = new Promise<null>((r) => setTimeout(() => r(null), REFRESH_WAIT_MS));
       try {

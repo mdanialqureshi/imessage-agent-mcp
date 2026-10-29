@@ -50,6 +50,8 @@ export interface Item {
   suggestedAction: string;
   missingDetails: string[];
   evidence: Evidence[];
+  /** Someone in the chat isn't a saved contact, so the text came from a stranger. */
+  unknownSender: boolean;
   note: string | null;
   snoozedUntil: string | null;
   createdAt: string;
@@ -119,6 +121,7 @@ function rowToItem(r: Record<string, any>): Item {
     suggestedAction: r.suggested_action,
     missingDetails: JSON.parse(r.missing_details),
     evidence: JSON.parse(r.evidence),
+    unknownSender: Boolean(r.unknown_sender),
     note: r.note,
     snoozedUntil: r.snoozed_until,
     createdAt: r.created_at,
@@ -147,6 +150,8 @@ export class Store {
     for (const col of ['discarded', 'skipped_chats']) {
       if (!runCols.has(col)) this.db.exec(`ALTER TABLE runs ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 0`);
     }
+    const itemCols = new Set((this.db.prepare('PRAGMA table_info(items)').all() as { name: string }[]).map((c) => c.name));
+    if (!itemCols.has('unknown_sender')) this.db.exec('ALTER TABLE items ADD COLUMN unknown_sender INTEGER NOT NULL DEFAULT 0');
   }
 
   close(): void {
@@ -207,19 +212,27 @@ export class Store {
     );
   }
 
+  chatIdsWithItems(): number[] {
+    return (this.db.prepare('SELECT DISTINCT chat_id FROM items').all() as { chat_id: number }[]).map((r) => Number(r.chat_id));
+  }
+
+  deleteItemsForChat(chatId: number): void {
+    this.db.prepare('DELETE FROM items WHERE chat_id = ?').run(chatId);
+  }
+
   createItem(fields: ItemFields): Item {
     const now = new Date().toISOString();
     const id = 'it_' + crypto.randomBytes(4).toString('hex');
     this.db
       .prepare(
         `INSERT INTO items (id, kind, status, chat_guid, chat_id, chat_label, person, title, detail, when_start, when_end,
-          when_text, precision, strength, confidence, suggested_action, missing_details, evidence, created_at, updated_at)
-         VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          when_text, precision, strength, confidence, suggested_action, missing_details, evidence, unknown_sender, created_at, updated_at)
+         VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id, fields.kind, fields.chatGuid, fields.chatId, fields.chatLabel, fields.person, fields.title, fields.detail,
         fields.whenStart, fields.whenEnd, fields.whenText, fields.precision, fields.strength, fields.confidence,
-        fields.suggestedAction, JSON.stringify(fields.missingDetails), JSON.stringify(fields.evidence), now, now,
+        fields.suggestedAction, JSON.stringify(fields.missingDetails), JSON.stringify(fields.evidence), fields.unknownSender ? 1 : 0, now, now,
       );
     return this.getItem(id)!;
   }
@@ -238,14 +251,15 @@ export class Store {
       .prepare(
         `UPDATE items SET kind = ?, person = ?, title = ?, detail = ?, when_start = ?, when_end = ?, when_text = ?,
           precision = ?, strength = ?, confidence = ?, suggested_action = ?, missing_details = ?, evidence = ?,
-          chat_label = ?, updated_at = ? WHERE id = ?`,
+          chat_label = ?, unknown_sender = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
         fields.kind, fields.person ?? existing.person, fields.title, fields.detail ?? existing.detail,
         hasTime ? fields.whenStart : existing.whenStart, hasTime ? fields.whenEnd : existing.whenEnd,
         fields.whenText ?? existing.whenText, hasTime ? fields.precision : existing.precision,
         fields.strength, fields.confidence, fields.suggestedAction,
-        JSON.stringify(fields.missingDetails), JSON.stringify(evidence), fields.chatLabel, new Date().toISOString(), id,
+        JSON.stringify(fields.missingDetails), JSON.stringify(evidence), fields.chatLabel,
+        fields.unknownSender || existing.unknownSender ? 1 : 0, new Date().toISOString(), id,
       );
   }
 
