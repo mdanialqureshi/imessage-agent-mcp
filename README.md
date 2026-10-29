@@ -169,7 +169,7 @@ npm run safety                        # secret and personal-data scan
 git config core.hooksPath .githooks   # run the checks before each commit and push
 ```
 
-More: [agent setup](docs/agent-setup.md) · [security](docs/security.md) · [roadmap](docs/roadmap.md) · [SECURITY.md](SECURITY.md) for reporting a vulnerability. Contributions must never include real messages, contacts, databases, logs or keys.
+More: [agent setup](docs/agent-setup.md) · [security](docs/security.md) · [releasing](docs/releasing.md) · [roadmap](docs/roadmap.md) · [SECURITY.md](SECURITY.md) for reporting a vulnerability. Contributions must never include real messages, contacts, databases, logs or keys.
 
 ## License
 

@@ -28,3 +28,21 @@ dist/
 # Build outputs
 *.dmg
 *.zip
+
+# Signing material (it lives in the Keychain or outside the repo)
+*.pem
+*.p8
+*.p12
+*.pfx
+*.key
+*.cer
+*.der
+*.crt
+*.certSigningRequest
+*.mobileprovision
+*.provisionprofile
+*.keychain
+*.keychain-db
+AuthKey_*
+sig.bin
+pub.der

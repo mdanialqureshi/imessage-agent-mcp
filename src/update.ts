@@ -14,6 +14,7 @@ import { createHash, createPublicKey, verify } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { appBundle } from './config.ts';
 
 export const REPO = 'mdanialqureshi/imessage-agent-mcp';
 export const APP_NAME = 'Messages Agent';
@@ -109,6 +110,8 @@ const plistValue = (file: string, key: string) =>
   spawnSync('/usr/bin/plutil', ['-extract', key, 'raw', '-o', '-', file], { encoding: 'utf8' }).stdout?.trim() ?? '';
 const signature = (target: string) => spawnSync('/usr/bin/codesign', ['-dvvv', target], { encoding: 'utf8' }).stderr ?? '';
 const cdhash = (target: string) => /^CDHash=([0-9a-f]{40,64})$/m.exec(signature(target))?.[1] ?? null;
+/** The Apple team that signed it, or null for an ad-hoc signature. */
+const teamOf = (target: string) => /^TeamIdentifier=([0-9A-Z]{10})$/m.exec(signature(target))?.[1] ?? null;
 
 /**
  * Checks a zip's own listing before anything is unpacked: every entry inside the app's folder,
@@ -189,8 +192,13 @@ export function unpackedMatches(dir: string, listed: Map<string, boolean>): void
   walk('');
 }
 
-/** Checks an unpacked app is this app, intact, at this version, with an intact reader. */
-export function verifyApp(app: string, version: string): void {
+/**
+ * Checks an unpacked app is this app, intact, at this version, with an intact reader. An app
+ * signed with a Developer ID (`team`: the running app's) takes only updates from the same team
+ * that Apple notarized, so a release built anywhere else can't replace it, even one carrying the
+ * release key's signature.
+ */
+export function verifyApp(app: string, version: string, team = appBundle ? teamOf(appBundle) : null): void {
   const st = fs.lstatSync(app);
   if (!st.isDirectory()) throw new Error('the update has no app in it');
   if (spawnSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]).status !== 0) throw new Error("the update's signature doesn't verify");
@@ -202,6 +210,10 @@ export function verifyApp(app: string, version: string): void {
   const r = signature(reader);
   if (!new RegExp(`^Identifier=${READER_ID.replace(/\./g, '\\.')}$`, 'm').test(r) || !/flags=0x\w+\([^)]*runtime/.test(r)) {
     throw new Error("the update's reader isn't the expected one");
+  }
+  if (team) {
+    if (teamOf(app) !== team || teamOf(reader) !== team) throw new Error("the update isn't signed by the same developer as this app");
+    if (spawnSync('/usr/sbin/spctl', ['--assess', '--type', 'execute', app]).status !== 0) throw new Error("the update isn't notarized by Apple");
   }
 }
 

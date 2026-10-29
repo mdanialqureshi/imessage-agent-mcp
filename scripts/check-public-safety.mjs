@@ -22,7 +22,8 @@ const FORBIDDEN_FILES = [
   /\.log$/,
   /(^|\/)exports?\//,
   /\.export\.txt$/,
-  /\.(pem|p12|pfx|key)$/i,
+  /\.(pem|p12|pfx|key|p8|cer|der|crt|certSigningRequest|mobileprovision|provisionprofile|keychain|keychain-db)$/i,
+  /(^|\/)AuthKey_[^/]*$/,
   /(^|\/)\.DS_Store$/,
 ];
 

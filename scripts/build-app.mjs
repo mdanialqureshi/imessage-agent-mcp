@@ -388,7 +388,7 @@ end run`;
     detach(check.device);
   }
   // Checking it made hdiutil tag the file with this Mac's disk id (an extended attribute, not
-  // part of the file, but it travels with a local copy). Releases are uploaded from CI.
+  // part of the file, but it travels with a local copy).
   run('/usr/bin/xattr', ['-c', dmg]);
 }
 
@@ -595,14 +595,14 @@ function assertLayoutIsClean(buf, layoutName) {
 }
 
 /** Strings that would identify the Mac or account that built the image. */
-function machineTraces(layoutName) {
+function machineTraces(layoutName, { signedImage = false } = {}) {
   const dataVolume = /Volume UUID:\s+([0-9A-F-]{36})/.exec(run('/usr/sbin/diskutil', ['info', '/System/Volumes/Data'], { encoding: 'utf8' }))?.[1];
   const tmp = fs.realpathSync(os.tmpdir());
   const quiet = (cmd, argv) => spawnSync(cmd, argv, { encoding: 'utf8' }).stdout?.trim() || null;
-  // A Developer ID signature carries its certificate, which names the signer: that name is
-  // meant to be public, so it's only a trace when it isn't the identity this build signs with.
+  // A signed image carries the Developer ID certificate, which names the signer: that name is
+  // meant to be public there, but only when this account's name is exactly the one signing.
   const fullName = quiet('/usr/bin/id', ['-F']);
-  const signer = fullName && identity?.includes(fullName);
+  const signer = signedImage && fullName && identity === `Developer ID Application: ${fullName} (${team})`;
   const traces = {
     'build file names': ['rw.dmg', 'fresh.dmg', 'imessage-agent-build', layoutName],
     'the startup disk name': ['Macintosh HD'],
@@ -622,7 +622,7 @@ function traces(strings, buf) {
 
 /** Scans a raw image file (every block, used or free) for traces of this Mac. */
 function assertImageIsClean(image, layoutName) {
-  const strings = machineTraces(layoutName);
+  const strings = machineTraces(layoutName, { signedImage: Boolean(identity) });
   const overlap = 4096;
   const fd = fs.openSync(image, 'r');
   try {

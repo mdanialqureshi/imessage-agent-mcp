@@ -242,6 +242,13 @@ test('MCP server exposes read-only tools and updates status', async () => {
 
   const search = await client.callTool({ name: 'search_messages', arguments: { query: 'code', days: 365 } });
   assert.doesNotMatch((search.content as { text: string }[])[0].text, /482913/);
+
+  // Someone not in Contacts is marked wherever agents read their messages directly.
+  const stranger = (await client.callTool({ name: 'get_conversation', arguments: { with: '2125550107', days: 90 } })).content as { text: string }[];
+  assert.match(stranger[0].text, /^## \+12125550107 \(⚠ not in Contacts\)$/m);
+  assert.match(stranger[0].text, /\+12125550107 \(not in Contacts\): hey/);
+  const found = (await client.callTool({ name: 'search_messages', arguments: { query: 'ignore previous', days: 365 } })).content as { text: string }[];
+  assert.match(found[0].text, /^\[\+12125550107 \(⚠ not in Contacts\)\] .*\(not in Contacts\): /m);
   await client.close();
 });
 
@@ -1107,6 +1114,9 @@ test('invisible characters that could hide instructions are removed', async () =
   const { displayText, isFilteredText } = await import('../src/messages/conversations.ts');
   assert.ok(isFilteredText('c\u200bode 123456'));
   assert.equal(displayText('your c\u00adode: 48\u200b29\u200b13'), '[filtered: verification code]');
+  // Look-alike digits, a lowercase "pin is", a code split like a phone number, digits spaced out.
+  for (const code of ['Your code is １２３４５６', 'your pin is 4821', 'verification code: 482 9131', 'code 4 8 2 9 1 3']) assert.ok(isFilteredText(code), code);
+  for (const plain of ['pin the meeting at 1230 tomorrow', 'call me at 555-0123', 'code review at 10 30']) assert.ok(!isFilteredText(plain), plain);
   // Everything Unicode calls invisible goes (Mongolian selectors, deprecated format characters,
   // interlinear annotation, musical format characters, Braille blank, unassigned tags).
   assert.equal(oneLine('a\u180b\u206a\ufff9\u{1d173}\u2800\u{e0080}b'), 'ab');

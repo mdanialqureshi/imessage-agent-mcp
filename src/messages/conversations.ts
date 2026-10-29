@@ -20,8 +20,8 @@ const MAX_WINDOW_CHARS = 40_000;
 
 const VERIFICATION_CODE =
   /\b(codes?|passcode|password|verification|verify|OTP|one[- ]time|2FA|MFA|security|log[- ]?in|sign[- ]?in|authenticat\w*)\b/i;
-/** Only in capitals: "pin the meeting" is a verb. */
-const PIN = /\bPIN\b/;
+/** In capitals, or "pin" followed by "is", a colon or "code": "pin the meeting" is a verb. */
+const PIN = /\bPIN\b|\b[Pp]in(?=\s*(?:[:#]|is\b|code\b|number\b))/;
 /** The same words in other common languages (no \b: it only knows ASCII letters). */
 const VERIFICATION_CODE_INTL =
   /c[oó]digo|verificaci[oó]n|contraseña|senha|bestätigung|sicherheitscode|kennwort|mot de passe|vérification|codice|verifica|weryfikac|код|验证码|驗證碼|認証|確認コード|인증/i;
@@ -29,12 +29,15 @@ const VERIFICATION_CODE_INTL =
 const NEAR = 40;
 
 /**
- * Digits, maybe split by dashes or slashes ("48-29-13"), or by spaces between groups of three or
- * more ("123 456", not a time like "10 30").
+ * Digits, maybe split by dashes or slashes ("48-29-13"), by spaces between groups of three or
+ * more ("123 456", not a time like "10 30"), or spaced out one by one ("4 8 2 9").
  */
-const DIGIT_RUNS = /\d+(?:[-/]\d+|\s\d{3,})*/g;
+const DIGIT_RUNS = /(?<!\d)(?:\d\s){3,7}\d(?!\d)|\d+(?:[-/]\d+|\s\d{3,})*/g;
 /** Not codes: dates (2026-11-03, 11-14-2026, 11/14/2026) and local phone numbers (555-0123). */
 const NOT_A_CODE = /^(?:\d{4}([-/])\d{1,2}\1\d{1,2}|\d{1,2}([-/])\d{1,2}\2\d{4}|\d{3}[-\s]\d{4})$/;
+/** ...unless it comes right after the word ("your code is 482 9131"). */
+const PHONE_LIKE = /^\d{3}[-\s]\d{4}$/;
+const CODE_RIGHT_BEFORE = /\b(?:codes?|passcode|OTP|PIN|[Pp]in)\W{0,3}(?:is\W{0,3})?$/i;
 
 /**
  * A code: 4–8 digits with a code word near them. Invisible characters are removed first, so they
@@ -42,10 +45,12 @@ const NOT_A_CODE = /^(?:\d{4}([-/])\d{1,2}\1\d{1,2}|\d{1,2}([-/])\d{1,2}\2\d{4}|
  */
 export function isFilteredText(raw: string): boolean {
   // Only the start of a message is ever shown (see displayText); this checks all of that and more.
-  const text = visible(raw.slice(0, MAX_MESSAGE_CHARS * 4));
+  // NFKC turns full-width and other look-alike digits into plain ones.
+  const text = visible(raw.slice(0, MAX_MESSAGE_CHARS * 4)).normalize('NFKC');
   for (const m of text.matchAll(DIGIT_RUNS)) {
     const digits = m[0].replace(/\D/g, '').length;
-    if (digits < 4 || digits > 8 || NOT_A_CODE.test(m[0])) continue;
+    if (digits < 4 || digits > 8) continue;
+    if (NOT_A_CODE.test(m[0]) && !(PHONE_LIKE.test(m[0]) && CODE_RIGHT_BEFORE.test(text.slice(Math.max(0, m.index - 24), m.index)))) continue;
     const around = text.slice(Math.max(0, m.index - NEAR), m.index + m[0].length + NEAR);
     if (VERIFICATION_CODE.test(around) || PIN.test(around) || VERIFICATION_CODE_INTL.test(around)) return true;
   }
@@ -113,8 +118,19 @@ export class Conversations {
     return names.join(', ') || displayText(chat.identifier);
   }
 
+  /** For agents reading messages directly: a stranger's chat goes by its people, and says so. */
+  agentLabel(chat: Chat): string {
+    return this.fromStranger(chat) ? `${this.peopleLabel(chat)} (⚠ not in Contacts)` : this.chatLabel(chat);
+  }
+
   sender(m: Message): string {
     return m.fromMe ? 'Me' : displayText(this.contacts.label(m.handle));
+  }
+
+  /** The sender, marked when they aren't in Contacts (for agents reading messages directly). */
+  agentSender(m: Message): string {
+    const unknown = !m.fromMe && this.contacts.size > 0 && this.contacts.name(m.handle) === null;
+    return unknown ? `${this.sender(m)} (not in Contacts)` : this.sender(m);
   }
 
   /** Chats with new messages, each with earlier context so replies make sense. */

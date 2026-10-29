@@ -1,16 +1,17 @@
 name: Release
 
-# Pushing a tag like v0.2.0 builds the Mac app, tests the build, and publishes it as a GitHub
-# release. Running it by hand only builds and tests.
+# Releases are built, signed with a Developer ID, notarized and signed for the updater on the
+# maintainer's Mac (docs/releasing.md), then published by hand with their tag. Pushing that tag
+# runs this workflow, which checks the release from the outside.
 #
-# Three jobs. `build` runs only this project's own scripts (no dependency code: npm installs
-# without scripts, and the build never loads a package) and uploads the files. `test` runs the
-# tests, which do load dependencies, on a copy it downloads, so nothing it runs can change what
-# ships. `publish`, which only runs pinned GitHub actions and the runner's own tools, checks,
-# signs and uploads the files; nothing that runs project dependencies ever holds a token that
-# can write to the repo or the release key. `test` could still upload an artifact of its own
-# under the same name, so `publish` downloads `build`'s upload by its ID and checks
-# SHA256SUMS.txt against the hash `build` passed on in its job outputs.
+# Three jobs. `build` builds the app from the tagged source, running only this project's own
+# scripts (no dependency code: npm installs without scripts, and the build never loads a
+# package), and `test` runs the tests and the app tests on that build, on a copy it downloads.
+# `check` downloads what was actually published and checks it: the tag is on master and matches
+# package.json, the files match SHA256SUMS.txt and nothing else is attached, that file carries a
+# valid signature from the release key built into the app, and the app is this version, signed
+# by a Developer ID, with notarization tickets stapled to the app and disk image. Nothing here
+# holds a signing key or can write to the repo.
 on:
   push:
     tags: ['v*']
@@ -18,14 +19,10 @@ on:
 
 permissions:
   contents: read
-  attestations: read # to check the previous release was built here
 
 jobs:
   build:
     runs-on: macos-latest
-    outputs:
-      artifact-id: ${{ steps.up.outputs.artifact-id }}
-      sums: ${{ steps.sums.outputs.sha256 }}
     steps:
       # Actions are pinned to commit SHAs so a moved tag can't change what runs.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,31 +35,9 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Public-repo safety (all files, commit authors and messages)
         run: npm run safety:all
-      # Reusing the last release's reader (when its inputs are unchanged) keeps people's Full
-      # Disk Access switched on across updates. Only a release this workflow provably built (its
-      # build provenance attestation) is reused; anything else, and the reader is built fresh.
-      - name: Previous release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          prev=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName 2>/dev/null || true)
-          if [ -z "$prev" ] || ! gh release download "$prev" --repo "$GITHUB_REPOSITORY" --pattern 'Messages-Agent-*.zip' --dir previous; then
-            echo "No previous release."
-          elif ! gh attestation verify previous/*.zip --repo "$GITHUB_REPOSITORY" \
-              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
-              --source-ref "refs/tags/$prev" --deny-self-hosted-runners; then
-            echo "::warning::The previous release's zip has no valid attestation from this workflow; building a fresh reader."
-            rm -rf previous
-          fi
       - name: Build the app (Apple silicon and Intel)
-        run: |
-          prev=$(ls previous/*.zip 2>/dev/null | head -1)
-          node scripts/build-app.mjs ${prev:+--reader-from "$prev"}
-      - name: Hash the checksums
-        id: sums
-        run: echo "sha256=$(shasum -a 256 dist/SHA256SUMS.txt | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+        run: node scripts/build-app.mjs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        id: up
         with:
           name: release
           path: |
@@ -94,18 +69,11 @@ jobs:
           ditto -x -k dist/Messages-Agent-*.zip dist/
           IMESSAGE_AGENT_APP='dist/Messages Agent.app' node --test test/app.test.ts
 
-  publish:
+  check:
     needs: [build, test]
-    # Only a pushed tag publishes (a run started by hand only builds and tests, whatever its ref).
+    # Only a pushed tag has a release to check.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    # The release key is an environment secret: only runs this environment allows (tags v*,
-    # with a reviewer) can read it, not any workflow someone pushes to a branch.
-    environment: release
-    permissions:
-      contents: write # to publish the release
-      id-token: write # for the build provenance attestation
-      attestations: write
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -115,60 +83,43 @@ jobs:
         run: |
           git merge-base --is-ancestor "$GITHUB_SHA" origin/master
           test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
-      # A release can be built, notarized and signed on the maintainer's Mac and published by
-      # hand; this job then leaves it as it is rather than replacing it with an unnotarized build.
-      - name: Is this tag already released?
-        id: existing
+      - name: Download the published release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            echo "::notice::$GITHUB_REF_NAME is already released; leaving it as it is."
-            echo "released=true" >> "$GITHUB_OUTPUT"
-          fi
-      # By ID, not name: `build`'s own upload, whatever else the run uploaded.
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: steps.existing.outputs.released != 'true'
-        with:
-          artifact-ids: ${{ needs.build.outputs.artifact-id }}
-          path: dist
-      - name: The files match their checksums
-        if: steps.existing.outputs.released != 'true'
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir published || {
+            echo "::error::No release for $GITHUB_REF_NAME. Build, notarize and publish it first (docs/releasing.md), then push the tag."
+            exit 1
+          }
+      - name: The files are exactly the ones listed, and match their checksums
+        working-directory: published
         run: |
-          test "$(sha256sum dist/SHA256SUMS.txt | cut -d' ' -f1)" = "${{ needs.build.outputs.sums }}"
-          cd dist && sha256sum --check SHA256SUMS.txt
-      # The app installs an update only if its checksums carry this signature. Signed with the
-      # runner's own OpenSSL (nothing downloaded holds the key), then checked against the public
-      # key the app ships with, so a release signed with the wrong key fails here.
-      - name: Sign the checksums for the in-app updater
-        if: steps.existing.outputs.released != 'true'
-        shell: bash # -eo pipefail
-        env:
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          diff <(ls | sort) <( (cut -d' ' -f3 SHA256SUMS.txt; echo SHA256SUMS.txt; echo SHA256SUMS.txt.sig) | sort)
+          shasum -a 256 -c SHA256SUMS.txt
+      - name: The checksums carry the release key's signature (the one built into the app)
+        working-directory: published
         run: |
-          test -n "$UPDATE_SIGNING_KEY" || { echo "::error::Add the UPDATE_SIGNING_KEY secret to the release environment (see docs/security.md)."; exit 1; }
-          umask 077
-          key="$RUNNER_TEMP/update-signing-key.pem"
-          trap 'rm -f "$key"' EXIT
-          printf '%s\n' "$UPDATE_SIGNING_KEY" > "$key"
-          openssl pkeyutl -sign -rawin -inkey "$key" -in dist/SHA256SUMS.txt -out "$RUNNER_TEMP/sig.bin"
-          grep -o "UPDATE_PUBLIC_KEY = '[^']*'" src/update.ts | cut -d"'" -f2 | base64 -d > "$RUNNER_TEMP/pub.der"
+          grep -o "UPDATE_PUBLIC_KEY = '[^']*'" ../src/update.ts | cut -d"'" -f2 | base64 -d > "$RUNNER_TEMP/pub.der"
           test -s "$RUNNER_TEMP/pub.der"
-          openssl pkeyutl -verify -pubin -keyform DER -inkey "$RUNNER_TEMP/pub.der" -rawin -in dist/SHA256SUMS.txt -sigfile "$RUNNER_TEMP/sig.bin"
-          base64 -w0 "$RUNNER_TEMP/sig.bin" > dist/SHA256SUMS.txt.sig
-          echo >> dist/SHA256SUMS.txt.sig
-      # Lets anyone check a download was built here from this tag: gh attestation verify <file> -R <repo>.
-      # (GitHub only offers attestations for public repositories on most plans.)
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        if: steps.existing.outputs.released != 'true' && github.event.repository.visibility == 'public'
-        with:
-          subject-path: |
-            dist/*.dmg
-            dist/*.zip
-      - name: Publish the release
-        if: steps.existing.outputs.released != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
+          base64 -d -i SHA256SUMS.txt.sig > "$RUNNER_TEMP/sig.bin"
+          openssl pkeyutl -verify -pubin -keyform DER -inkey "$RUNNER_TEMP/pub.der" -rawin -in SHA256SUMS.txt -sigfile "$RUNNER_TEMP/sig.bin"
+      - name: The app is this version, signed with a Developer ID and notarized
+        working-directory: published
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.dmg dist/*.zip dist/SHA256SUMS.txt dist/SHA256SUMS.txt.sig \
-            --title "Messages Agent $GITHUB_REF_NAME" --notes-file .github/release-notes.md
+          version="${GITHUB_REF_NAME#v}"
+          ditto -x -k --norsrc --noextattr --noacl Messages-Agent-*.zip app
+          bundle="app/Messages Agent.app"
+          test "$(plutil -extract CFBundleShortVersionString raw -o - "$bundle/Contents/Info.plist")" = "$version"
+          codesign --verify --deep --strict "$bundle"
+          for target in "$bundle" "$bundle/Contents/Helpers/Messages Agent Reader.app"; do
+            codesign -dvv "$target" 2>&1 | grep -q '^Authority=Developer ID Application: '
+            codesign -dvv "$target" 2>&1 | grep -Eq '^TeamIdentifier=[0-9A-Z]{10}$'
+          done
+          xcrun stapler validate "$bundle"
+          xcrun stapler validate Messages-Agent-*.dmg
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - name: Test the published app
+        run: IMESSAGE_AGENT_APP='published/app/Messages Agent.app' node --test test/app.test.ts

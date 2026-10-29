@@ -54,6 +54,15 @@ test('the app and everything in it is signed, and the reader keeps its protectio
   }
 });
 
+test('an app signed with a Developer ID takes updates only from the same developer, notarized', { skip }, async () => {
+  const { verifyApp } = await import('../src/update.ts');
+  const version = plist(path.join(contents, 'Info.plist'), 'CFBundleShortVersionString');
+  const team = /^TeamIdentifier=([0-9A-Z]{10})$/m.exec(signature(app!))?.[1] ?? null;
+  assert.throws(() => verifyApp(app!, version, 'ZZZZZZZZZZ'), /same developer/);
+  // A release build passes as its own update; an ad-hoc one (a clone's) has no team to match.
+  assert.doesNotThrow(() => verifyApp(app!, version, team));
+});
+
 test('Info.plist makes it a menu bar app with the right version', { skip }, () => {
   const info = path.join(contents, 'Info.plist');
   assert.equal(plist(info, 'CFBundleIdentifier'), 'com.imessage-agent-mcp.app');
@@ -190,7 +199,7 @@ test('an update is downloaded only from GitHub and installed only if it checks o
   const name = `Messages-Agent-${version}.zip`;
   const base = `https://github.com/mdanialqureshi/imessage-agent-mcp/releases/download/v${version}/`;
   const release = (zip: Buffer) => ({ version, url: '', zip: { name, url: base + name, size: zip.length }, sums: { url: base + 'SHA256SUMS.txt' }, sig: { url: base + 'SHA256SUMS.txt.sig' } });
-  // A stand-in for the release key; the real one's private half is only in the release workflow.
+  // A stand-in for the release key; the real one's private half is only on the maintainer's Mac.
   const keys = generateKeyPairSync('ed25519');
   const publicKey = keys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
   const signWith = (key: KeyObject, sums: string) => cryptoSign(null, Buffer.from(sums), key).toString('base64');

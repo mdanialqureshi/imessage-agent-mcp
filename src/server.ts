@@ -69,7 +69,7 @@ async function withMessages<T>(config: Config, fn: (db: ChatDb, conv: Conversati
 
 function renderMessage(conv: Conversations, m: Message): string {
   const body = m.reaction ? `reacted ${displayText(m.reaction.emoji)}` : displayText(m.text) || '[attachment]';
-  return `${formatTime(m.date)} ${conv.sender(m)}: ${body}`;
+  return `${formatTime(m.date)} ${conv.agentSender(m)}: ${body}`;
 }
 
 export function createServer(config: Config): McpServer {
@@ -183,7 +183,7 @@ export function createServer(config: Config): McpServer {
           .allChats()
           .filter((c) => !conv.isExcluded(c))
           .filter((c) => conv.chatLabel(c).toLowerCase().includes(needle) || c.handles.some((h) => h.toLowerCase().includes(needle)))
-          .map((c) => ({ label: conv.chatLabel(c), messages: db.messagesInChat(c.id, args.limit ?? 50, since) }))
+          .map((c) => ({ label: conv.agentLabel(c), messages: db.messagesInChat(c.id, args.limit ?? 50, since) }))
           .filter((c) => c.messages.length)
           .map((c) => `## ${c.label}\n${c.messages.map((m) => renderMessage(conv, m)).join('\n')}`),
       );
@@ -215,7 +215,7 @@ export function createServer(config: Config): McpServer {
             return chat && !conv.isExcluded(chat);
           })
           .slice(-(limit ?? 25))
-          .map((m) => `[${conv.chatLabel(db.chat(m.chatId)!)}] ${renderMessage(conv, m)}`),
+          .map((m) => `[${conv.agentLabel(db.chat(m.chatId)!)}] ${renderMessage(conv, m)}`),
       );
       return text(hits.length ? hits.join('\n') : `No messages matching "${query}".`);
     },
