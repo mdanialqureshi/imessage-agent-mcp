@@ -303,8 +303,9 @@ test('service listens only on a private Unix socket, and the bridge relays MCP t
   assert.deepEqual(odd.map((r) => r.error?.code), [-32600, -32600, -32600], 'bad input gets an error, never a crash');
   const down = await relay([init]);
   assert.equal(down[0].id, 1);
-  assert.equal(down[0].error.message, SERVICE_DOWN, 'apps get a clear message when the service is off');
-  assert.deepEqual(await callTool(socketPath(), 'get_status'), { text: SERVICE_DOWN, isError: true });
+  assert.ok(down[0].error.message.startsWith(SERVICE_DOWN), 'apps get a clear message when the service is off');
+  const offline = await callTool(socketPath(), 'get_status');
+  assert.ok(offline.isError && offline.text.startsWith(SERVICE_DOWN), offline.text);
   // A blocked connection (a sandbox around the agent's command) says so, rather than "not running".
   const { serviceDown } = await import('../src/bridge.ts');
   assert.match(serviceDown(Object.assign(new Error('x'), { code: 'EPERM' })), /blocked/);

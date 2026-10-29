@@ -16,7 +16,7 @@ export const SERVICE_DOWN = appBundle
  */
 export function serviceDown(err?: NodeJS.ErrnoException): string {
   if (err?.code === 'EPERM' || err?.code === 'EACCES') {
-    return "Something on this Mac blocked this command from reaching Messages Agent's background service (often a sandbox around the command). Run it outside the sandbox, or ask the user to allow it.";
+    return "Something on this Mac blocked this command from reaching Messages Agent's background service (often a sandbox around the command). Ask the user to approve running this exact command.";
   }
   let realHome = os.homedir();
   try {
@@ -25,7 +25,7 @@ export function serviceDown(err?: NodeJS.ErrnoException): string {
     // Keep the environment's.
   }
   if (realHome !== os.homedir()) {
-    return `${SERVICE_DOWN} (This command ran with its home folder set to ${os.homedir()} instead of ${realHome}, so it may have looked in the wrong place: run it with the normal home folder.)`;
+    return `${SERVICE_DOWN} (This command ran with a different home folder than this account's, so it may have looked in the wrong place: run it with the normal home folder.)`;
   }
   return SERVICE_DOWN;
 }

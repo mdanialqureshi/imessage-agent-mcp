@@ -282,7 +282,7 @@ export function socketPath(): string {
 /**
  * For `connect` and `call`, which agents launch, sometimes with a home folder of their own (a
  * sandbox's): the Mac app's service lives in your real home folder, so look there too. Only
- * this account's own folder, and only when nothing answers where the environment points.
+ * this account's own folder, and only when there's no socket where the environment points.
  */
 export function agentSocketPath(): string {
   const own = socketPath();
