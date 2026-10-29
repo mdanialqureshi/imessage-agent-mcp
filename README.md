@@ -10,6 +10,8 @@
   No server, no API keys, no open ports.
 </p>
 
+https://github.com/user-attachments/assets/1bfb92f1-633c-4f1d-9e92-341a7b4b6f22
+
 ---
 
 You reply "let's do it" to "dinner Tuesday?" and never put it in your calendar. Your assistant can't help, because it can't see your texts.
