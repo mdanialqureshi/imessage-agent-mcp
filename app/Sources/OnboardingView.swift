@@ -11,7 +11,6 @@ struct OnboardingView: View {
   var startPage: Page? = nil
   @State private var page = Page.welcome
   @State private var forward = true
-  @State private var placed = false
 
   enum Page: Int, CaseIterable {
     case welcome, interpreter, service, access, apps, agent, finished
@@ -92,23 +91,16 @@ struct OnboardingView: View {
   private func done(_ page: Page) -> Bool {
     let s = model.status
     switch page {
-    case .interpreter: return model.interpreters.first { $0.name == s?.interpreter }?.ok ?? false
+    case .interpreter: return model.interpreterChosen && (model.interpreters.first { $0.name == s?.interpreter }?.ok ?? false)
     case .service: return s?.serviceReady ?? false
     case .access: return s?.reader.access == "ok"
     default: return true // Connecting apps and telling your agent are up to you.
     }
   }
 
-  /// Opens at the first step that isn't done, so reopening mid-setup picks up where you were.
+  /// Always opens at the welcome page and goes through every step (previews can start elsewhere).
   private func place() async {
-    guard !placed else { return }
-    placed = true
-    if let startPage { page = startPage; return }
-    for _ in 0..<100 where model.status == nil || model.interpreters.isEmpty {
-      try? await Task.sleep(nanoseconds: 100_000_000)
-    }
-    guard done(.interpreter) else { return }
-    page = [Page.service, .access].first { !done($0) } ?? .welcome
+    if let startPage { page = startPage }
   }
 
   // MARK: Chrome
@@ -165,7 +157,7 @@ struct OnboardingView: View {
 
   private var hint: String {
     switch page {
-    case .interpreter: return "Sign in to continue"
+    case .interpreter: return model.interpreterChosen ? "Sign in to continue" : "Choose one to continue"
     case .service: return "Install to continue"
     case .access: return "Waiting for access"
     default: return ""

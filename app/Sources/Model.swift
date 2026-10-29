@@ -17,6 +17,8 @@ final class Model: ObservableObject {
   @Published private(set) var busyCommand: String?
   /// Why the last action failed.
   @Published var problem: String?
+  /// Whether you've picked what reads your messages (Claude Code or Codex): setup never assumes one.
+  @Published private(set) var interpreterChosen = UserDefaults.standard.bool(forKey: "interpreterChosen")
   /// The service installed from here never answered, so the page offers Install again.
   @Published private(set) var serviceStalled = false
   private var serviceWatch: Task<Void, Never>?
@@ -280,7 +282,13 @@ final class Model: ObservableObject {
   }
 
   func useInterpreter(_ name: String) async {
-    await act("Switching to \(name == "codex" ? "Codex" : "Claude Code")…", ["use", name], full: true)
+    // Picking the one already set just records the choice.
+    var ok = name == status?.interpreter
+    if !ok { ok = await act("Switching to \(name == "codex" ? "Codex" : "Claude Code")…", ["use", name], full: true) }
+    if ok && !previewing {
+      interpreterChosen = true
+      UserDefaults.standard.set(true, forKey: "interpreterChosen")
+    }
   }
 
   /// Waits until nothing else holds the turn (first come, first served), then holds it.
@@ -376,6 +384,7 @@ final class Model: ObservableObject {
   /// For `--render-previews`: shows a given state without running anything.
   func preview(_ status: Status, mustMoveFirst: Bool = false) {
     previewing = true
+    interpreterChosen = true
     self.status = status
     interpreters = status.interpreters ?? []
     apps = status.apps ?? []

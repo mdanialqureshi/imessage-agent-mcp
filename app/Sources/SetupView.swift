@@ -207,21 +207,22 @@ struct InterpreterStep: View {
   @State private var choice: String?
 
   var body: some View {
-    let active = choice ?? model.status?.interpreter ?? "claude"
+    // Nothing is selected until you pick one.
+    let active = choice ?? (model.interpreterChosen ? model.status?.interpreter : nil)
     let current = choice == nil ? model.interpreters.first { $0.name == active } : nil
     Step(number: 1, title: "Choose what reads your new messages",
          subtitle: "Your own Claude or ChatGPT subscription, through its command-line tool. No API keys, no extra cost.",
          done: current?.ok ?? false, symbol: "sparkles") {
-      Picker("", selection: Binding(get: { active }, set: { name in
-        guard name != (model.status?.interpreter ?? "claude") else { return }
+      Picker("", selection: Binding<String?>(get: { active }, set: { name in
+        guard let name, name != active else { return }
         choice = name
         Task {
           await model.useInterpreter(name)
           choice = nil
         }
       })) {
-        Text("Claude Code (Claude plan)").tag("claude")
-        Text("Codex (ChatGPT plan)").tag("codex")
+        Text("Claude Code (Claude plan)").tag("claude" as String?)
+        Text("Codex (ChatGPT plan)").tag("codex" as String?)
       }
       .pickerStyle(.radioGroup)
       .labelsHidden()
@@ -233,6 +234,8 @@ struct InterpreterStep: View {
               systemImage: current.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
           .foregroundStyle(current.ok ? .green : .red)
         if !current.ok { InstallHelp(name: current.name) }
+      } else if active == nil {
+        Text("Pick the one whose plan you have.").font(.callout).foregroundStyle(.secondary)
       } else {
         HStack { ProgressView().controlSize(.small); Text("Checking…") }
       }
