@@ -1130,7 +1130,7 @@ test('invisible characters that could hide instructions are removed', async () =
   const started = Date.now();
   isFilteredText('a\u200b'.repeat(500_000));
   displayText('a\u200b'.repeat(500_000));
-  assert.ok(Date.now() - started < 5000, "linear, not quadratic");
+  assert.ok(Date.now() - started < 2000, 'linear, not quadratic');
 });
 
 test("a stranger's words stay out of the brief, and are labelled where they are shown", async () => {

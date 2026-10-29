@@ -124,7 +124,8 @@ function runningTeam(): string | null {
   if (!appBundle) return null;
   const own = signature(appBundle);
   if (!/^Identifier=/m.test(own)) throw new Error("this app can't read its own signature, so it can't check an update");
-  if (!/^Authority=Developer ID Application: /m.test(own)) return null;
+  if (/^Signature=adhoc$/m.test(own)) return null;
+  if (!/^Authority=Developer ID Application: /m.test(own)) throw new Error("this app isn't signed ad-hoc or with a Developer ID, so it can't check an update");
   const team = /^TeamIdentifier=([0-9A-Z]{10})$/m.exec(own)?.[1];
   if (!team || !satisfies(appBundle, developerId(team))) throw new Error("this app's own Developer ID signature doesn't check out");
   return team;
@@ -231,7 +232,7 @@ export function verifyApp(app: string, version: string, team = runningTeam()): v
   if (team) {
     if (!/^[0-9A-Z]{10}$/.test(team)) throw new Error('not a team identifier');
     if (!satisfies(reader, developerId(team)) || !satisfies(app, developerId(team), ['--deep'])) throw new Error("the update isn't signed by the same developer as this app");
-    // Notarization, from the ticket stapled to it (checked without the network).
+    // Notarized by Apple: the ticket stapled to it (or, failing that, Apple's records).
     if (!satisfies(app, `${developerId(team)} and notarized`, ['--deep', '--check-notarization'])) throw new Error("the update isn't notarized by Apple");
   }
 }

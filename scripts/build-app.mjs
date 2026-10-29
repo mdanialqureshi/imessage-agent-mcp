@@ -49,7 +49,9 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const opt = (name, fallback) => {
   const i = args.indexOf(`--${name}`);
-  return i >= 0 ? args[i + 1] : fallback;
+  if (i < 0) return fallback;
+  if (!args[i + 1] || args[i + 1].startsWith('--')) throw new Error(`--${name} needs a value`);
+  return args[i + 1];
 };
 const out = path.resolve(opt('out', path.join(root, 'dist')));
 const native = os.arch() === 'arm64' ? 'arm64' : 'x86_64';
@@ -155,7 +157,18 @@ try {
   step('Server source and its dependencies');
   const res = path.join(contents, 'Resources/app');
   for (const f of ['package.json', 'package-lock.json', 'LICENSE']) fs.copyFileSync(path.join(root, f), path.join(res, f));
-  fs.cpSync(path.join(root, 'src'), path.join(res, 'src'), { recursive: true });
+  // Only files git tracks: nothing ignored (a stray config.json, database or log) can ship.
+  const tracked = spawnSync('git', ['ls-files', '-z', '--', 'src'], { cwd: root, encoding: 'utf8' });
+  if (tracked.status === 0) {
+    for (const file of tracked.stdout.split('\0').filter(Boolean)) {
+      fs.mkdirSync(path.dirname(path.join(res, file)), { recursive: true });
+      fs.copyFileSync(path.join(root, file), path.join(res, file));
+    }
+  } else if (identity) {
+    throw new Error("can't list the tracked source files; a signed build needs a git checkout");
+  } else {
+    fs.cpSync(path.join(root, 'src'), path.join(res, 'src'), { recursive: true });
+  }
   run('npm', ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: res, stdio: ['ignore', 'ignore', 'inherit'] });
   // Command shims nothing here runs; without them the app holds no symlinks, so an update
   // can refuse any zip that has one.

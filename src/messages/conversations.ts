@@ -33,22 +33,15 @@ const NEAR = 40;
  * or more ("123 456", not a time like "10 30"), in three or more pairs ("48 29 13"), or spaced out
  * one by one ("4 8 2 9").
  */
-const DIGIT_RUNS = /(?<!\d)(?:\d\s+){3,7}\d(?!\d)|(?<!\d)(?:\d\d\s){2,3}\d\d(?!\d)|\d+(?:[-/.\u2010-\u2015]\d+|\s\d{3,})*/g;
+const DIGIT_RUNS = /(?<!\d)(?:\d\s+){3,7}\d(?!\d)|(?<!\d)(?:\d\d\s){2,3}\d\d(?!\d)|\d+(?:[-/._\u00b7\u2010-\u2015\u2212]\d+|\s\d{3,})*/g;
 /** Not codes: dates (2026-11-03, 11-14-2026, 29.10.2026) and local phone numbers (555-0123). */
 const NOT_A_CODE = /^(?:\d{4}([-/.])\d{1,2}\1\d{1,2}|\d{1,2}([-/.])\d{1,2}\2\d{4}|\d{3}[-\s]\d{4})$/;
 /** ...unless the word is right before or after it ("your code is 482 9131", "482-9131 is your code"). */
 const PHONE_LIKE = /^\d{3}[-\s]\d{4}$/;
 const CODE_RIGHT_BEFORE = /\b(?:codes?|passcode|OTP|PIN|[Pp]in)\W{0,3}(?:is\W{0,3})?$/i;
 const CODE_RIGHT_AFTER = /^\W{0,3}is\s+(?:your\s+|the\s+)?(?:\w+\s+){0,2}(?:codes?|passcode|OTP|PIN)\b/i;
-/** Every script's digits as plain ones ("٤٨٢٩" is "4829"); NFKC covers full-width and the like. */
+/** Every script's digits as plain ones; only how many there are matters here, not their values. */
 const OTHER_DIGITS = /(?![0-9])\p{Nd}/gu;
-function plainDigit(d: string): string {
-  // Unicode puts each script's digits 0–9 in a row: count back to its zero.
-  let cp = d.codePointAt(0)!;
-  let value = 0;
-  while (value < 9 && /\p{Nd}/u.test(String.fromCodePoint(cp - 1)) && (cp - 1) % 16 !== 15) cp--, value++;
-  return String((d.codePointAt(0)! - cp) % 10);
-}
 
 /**
  * A code: 4–8 digits with a code word near them. Invisible characters are removed first, so they
@@ -56,7 +49,7 @@ function plainDigit(d: string): string {
  */
 export function isFilteredText(raw: string): boolean {
   // Only the start of a message is ever shown (see displayText); this checks all of that and more.
-  const text = visible(raw.slice(0, MAX_MESSAGE_CHARS * 4)).normalize('NFKC').replace(OTHER_DIGITS, plainDigit);
+  const text = visible(raw.slice(0, MAX_MESSAGE_CHARS * 4)).normalize('NFKC').replace(OTHER_DIGITS, '0');
   for (const m of text.matchAll(DIGIT_RUNS)) {
     const digits = m[0].replace(/\D/g, '').length;
     if (digits < 4 || digits > 8) continue;

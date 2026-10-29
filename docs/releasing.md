@@ -16,13 +16,14 @@ You need:
    node scripts/build-app.mjs --identity "Developer ID Application: <Name> (<TEAMID>)" --notarize <profile>
    ```
    It refuses to run with uncommitted changes or a commit that isn't on `origin/master`. It signs everything with the hardened runtime and a secure timestamp, notarizes and staples the app, then the disk image, and writes `dist/Messages-Agent-<version>.dmg`, `.zip` and `SHA256SUMS.txt`.
-3. Sign the checksums for the in-app updater, and check the signature against the key the app ships with:
+3. Sign the checksums for the in-app updater, and check the signature against the key the app ships with (with OpenSSL 3: macOS's own LibreSSL can't do Ed25519):
    ```sh
-   openssl pkeyutl -sign -rawin -inkey <key.pem> -in dist/SHA256SUMS.txt -out sig.bin
+   openssl=$(brew --prefix openssl@3)/bin/openssl
+   $openssl pkeyutl -sign -rawin -inkey <key.pem> -in dist/SHA256SUMS.txt -out sig.bin
    base64 -i sig.bin > dist/SHA256SUMS.txt.sig && rm sig.bin
    grep -o "UPDATE_PUBLIC_KEY = '[^']*'" src/update.ts | cut -d"'" -f2 | base64 -d > pub.der
    base64 -d -i dist/SHA256SUMS.txt.sig > sig.bin
-   openssl pkeyutl -verify -pubin -keyform DER -inkey pub.der -rawin -in dist/SHA256SUMS.txt -sigfile sig.bin && rm pub.der sig.bin
+   $openssl pkeyutl -verify -pubin -keyform DER -inkey pub.der -rawin -in dist/SHA256SUMS.txt -sigfile sig.bin && rm pub.der sig.bin
    ```
 4. Check the build: `spctl -a -vv "dist/Messages Agent.app"` says `source=Notarized Developer ID`, `xcrun stapler validate` passes on the app and the disk image, and `IMESSAGE_AGENT_APP="dist/Messages Agent.app" node --test test/app.test.ts` passes.
 5. Publish it with its tag on that commit:

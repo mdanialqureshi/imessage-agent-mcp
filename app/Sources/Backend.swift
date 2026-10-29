@@ -175,7 +175,9 @@ enum Backend {
           let info = info as? [String: Any]
     else { return nil }
     let identifier = #"identifier "com.imessage-agent-mcp.app""#
-    guard let team = info[kSecCodeInfoTeamIdentifier as String] as? String else { return identifier } // Ad-hoc.
+    let flags = (info[kSecCodeInfoFlags as String] as? NSNumber)?.uint32Value ?? 0
+    if flags & SecCodeSignatureFlags.adhoc.rawValue != 0 { return identifier } // Built from a clone.
+    guard let team = info[kSecCodeInfoTeamIdentifier as String] as? String else { return nil }
     guard team.range(of: "^[0-9A-Z]{10}$", options: .regularExpression) != nil else { return nil }
     let text = identifier + " and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists"
       + " and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"\(team)\""
