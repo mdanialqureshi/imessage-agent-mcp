@@ -110,7 +110,7 @@ Nothing can send, edit or delete your messages. The only thing agents can change
 <details>
 <summary><b>Command-line install (no app)</b></summary>
 
-Needs [Node.js](https://nodejs.org) 23.6+ and Apple's Command Line Tools.
+Needs [Node.js](https://nodejs.org) 23.6+ and Apple's Command Line Tools. Clone it into your home folder: the service won't run code from a folder other accounts can change, like `/tmp`.
 
 ```sh
 git clone https://github.com/mdanialqureshi/imessage-agent-mcp.git ~/imessage-agent-mcp
@@ -158,6 +158,8 @@ The app's Settings cover the common ones. All of them live in `~/Library/Applica
 - The app isn't notarized by Apple, so a downloaded copy needs **Open Anyway** once.
 
 ## Development
+
+Clone it into your home folder (as above), then `npm ci`. Everything runs from source with Node 23.6+, with no build step; the app build needs Apple's Command Line Tools.
 
 ```sh
 npm test                              # synthetic tests (no real data, no model calls)
