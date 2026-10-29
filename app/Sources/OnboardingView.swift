@@ -7,7 +7,7 @@ import SwiftUI
 struct OnboardingView: View {
   @EnvironmentObject var model: Model
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  /// Shows this page right away (for previews); otherwise it starts at the first unfinished step.
+  /// Shows this page right away (for previews); otherwise it starts at the welcome page.
   var startPage: Page? = nil
   @State private var page = Page.welcome
   @State private var forward = true

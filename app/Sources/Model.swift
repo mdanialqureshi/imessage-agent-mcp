@@ -353,6 +353,11 @@ final class Model: ObservableObject {
   func uninstall(deleteData: Bool) async -> Bool {
     let ok = await act("Uninstalling…", ["uninstall"] + (deleteData ? ["--delete-data"] : []), full: true)
     if ok { try? await SMAppService.mainApp.unregister() }
+    if ok && deleteData {
+      // A fresh setup after this asks again what reads your messages.
+      interpreterChosen = false
+      UserDefaults.standard.removeObject(forKey: "interpreterChosen")
+    }
     return ok
   }
 
