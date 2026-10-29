@@ -1,12 +1,13 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { buildBrief, formatItem } from './brief.ts';
-import { type Config, ensureStateDir, loadConfig, paths } from './config.ts';
+import { appBundle, type Config, ensureStateDir, loadConfig, paths } from './config.ts';
 import { interpretNow, type RunResult } from './interpret/run.ts';
 import { ChatDb, type Message } from './messages/chatdb.ts';
 import { Contacts } from './messages/contacts.ts';
@@ -276,6 +277,24 @@ export function createServer(config: Config): McpServer {
 /** The service's only endpoint: a Unix socket in the private state folder. No network port. */
 export function socketPath(): string {
   return path.join(paths.stateDir, 'mcp.sock');
+}
+
+/**
+ * For `connect` and `call`, which agents launch, sometimes with a home folder of their own (a
+ * sandbox's): the Mac app's service lives in your real home folder, so look there too. Only
+ * this account's own folder, and only when nothing answers where the environment points.
+ */
+export function agentSocketPath(): string {
+  const own = socketPath();
+  if (!appBundle || process.env.IMESSAGE_AGENT_STATE_DIR || fs.existsSync(own)) return own;
+  let home: string;
+  try {
+    home = os.userInfo().homedir;
+  } catch {
+    return own;
+  }
+  const real = path.join(home, 'Library/Application Support/imessage-agent-mcp/mcp.sock');
+  return real !== own && fs.existsSync(real) ? real : own;
 }
 
 /** What the service itself can read; only counts, never content. */

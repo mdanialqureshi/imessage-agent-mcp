@@ -14,7 +14,7 @@ import { Conversations } from './messages/conversations.ts';
 import { assertOnlyYoursToChange, CLI_READER_APP, installReader, LEGACY_CLI_READER_APP, READER_LABEL, removeOldReaders, removeReaderBundle, readerApp, readerBinary, readerCdHash, readerInstalled, shippedReader, readerStatus, STALE_MS } from './messages/mirror.ts';
 import { APPS, which } from './apps.ts';
 import { bridge, callTool, type ServiceHealth, serviceHealth } from './bridge.ts';
-import { serveSocket, socketPath } from './server.ts';
+import { agentSocketPath, serveSocket, socketPath } from './server.ts';
 import { Store } from './store.ts';
 
 const LABEL = 'com.imessage-agent-mcp';
@@ -732,7 +732,7 @@ async function main(): Promise<void> {
     case 'setup':
       return setup();
     case 'connect':
-      return bridge(socketPath());
+      return bridge(agentSocketPath());
     case 'call': {
       const usage = `Arguments must be one JSON object, e.g. call search_messages '{"query":"tuesday"}'`;
       if (rest.length > 2) throw new Error(usage);
@@ -745,7 +745,7 @@ async function main(): Promise<void> {
         }
       }
       if (typeof args !== 'object' || args === null || Array.isArray(args)) throw new Error(usage);
-      const res = await callTool(socketPath(), rest[0], args as Record<string, unknown>);
+      const res = await callTool(agentSocketPath(), rest[0], args as Record<string, unknown>);
       // Exit as soon as the answer is out; agents wait on the process, not the output.
       process.stdout.write(res.text + '\n', () => process.exit(res.isError ? 1 : 0));
       return;

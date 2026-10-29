@@ -1,4 +1,5 @@
 import http from 'node:http';
+import os from 'node:os';
 import readline from 'node:readline';
 import { PassThrough } from 'node:stream';
 import { appBundle } from './config.ts';
@@ -8,6 +9,26 @@ export const SERVICE_DOWN = appBundle
   ? "Messages Agent's background service isn't running on this Mac. On the Mac, open Messages Agent and follow its setup window."
   : "Messages Agent's background service isn't running on this Mac. On the Mac, run `node src/cli.ts doctor` " +
     'in the imessage-agent-mcp folder (or `node src/cli.ts setup` to reinstall it).';
+
+/**
+ * Why the service couldn't be reached, for the agent: blocked (usually a sandbox around the
+ * command), looked for under a different home folder, or simply not running.
+ */
+export function serviceDown(err?: NodeJS.ErrnoException): string {
+  if (err?.code === 'EPERM' || err?.code === 'EACCES') {
+    return "Something on this Mac blocked this command from reaching Messages Agent's background service (often a sandbox around the command). Run it outside the sandbox, or ask the user to allow it.";
+  }
+  let realHome = os.homedir();
+  try {
+    realHome = os.userInfo().homedir;
+  } catch {
+    // Keep the environment's.
+  }
+  if (realHome !== os.homedir()) {
+    return `${SERVICE_DOWN} (This command ran with its home folder set to ${os.homedir()} instead of ${realHome}, so it may have looked in the wrong place: run it with the normal home folder.)`;
+  }
+  return SERVICE_DOWN;
+}
 
 /** Longest a request may take; `refresh` waits up to 45s for interpretation. */
 const REQUEST_TIMEOUT_MS = 120_000;
@@ -101,7 +122,7 @@ export function bridge(
           });
         },
       );
-      req.on('error', () => fail(SERVICE_DOWN));
+      req.on('error', (err) => fail(serviceDown(err)));
       req.end(body);
     });
 

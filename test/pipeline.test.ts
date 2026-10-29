@@ -305,6 +305,9 @@ test('service listens only on a private Unix socket, and the bridge relays MCP t
   assert.equal(down[0].id, 1);
   assert.equal(down[0].error.message, SERVICE_DOWN, 'apps get a clear message when the service is off');
   assert.deepEqual(await callTool(socketPath(), 'get_status'), { text: SERVICE_DOWN, isError: true });
+  // A blocked connection (a sandbox around the agent's command) says so, rather than "not running".
+  const { serviceDown } = await import('../src/bridge.ts');
+  assert.match(serviceDown(Object.assign(new Error('x'), { code: 'EPERM' })), /blocked/);
 
   // A broken or stuck service is always an error, never a silent empty success or a hang.
   const http = await import('node:http');
