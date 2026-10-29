@@ -2,6 +2,7 @@
 // Blocks secrets and personal data from entering this public repo.
 // Scans staged files by default, or every tracked file with --all.
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -52,6 +53,16 @@ const PHONE = /(?:\+?1[\s.-]?)?\(?\b[2-9]\d{2}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b|\+\d
 // Fictional numbers: the 555-0100–0199 range reserved for fiction.
 const isFictionalPhone = (digits) => /^1?\d{3}5550[1]\d\d$/.test(digits);
 
+// Images someone has looked at (README logo and screenshots of synthetic data), pinned by
+// hash: changing one fails until it's looked at again and its new hash is listed here.
+const REVIEWED = path.join(path.dirname(new URL(import.meta.url).pathname), 'reviewed-images.txt');
+const reviewed = new Set(
+  (fs.existsSync(REVIEWED) ? fs.readFileSync(REVIEWED, 'utf8') : '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('#')),
+);
+
 const problems = [];
 for (const file of files) {
   if (FORBIDDEN_FILES.some((re) => re.test(file))) {
@@ -60,9 +71,13 @@ for (const file of files) {
   }
   // Staged mode reads the index, not the working tree, so a staged-then-deleted file is still scanned.
   if (all && (!fs.existsSync(file) || fs.statSync(file).isDirectory())) continue;
-  const content = all ? fs.readFileSync(file, 'utf8') : git('show', `:${file}`);
+  const bytes = all ? fs.readFileSync(file) : execFileSync('git', ['show', `:${file}`]);
+  const content = bytes.toString('utf8');
   if (content.includes('\u0000')) {
-    problems.push(`${file}: binary file — commit only reviewed text files`);
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    if (!/^docs\/[\w.-]+\.png$/.test(file) || !reviewed.has(`${hash}  ${file}`)) {
+      problems.push(`${file}: binary file — commit only reviewed text files (a docs/*.png you've looked at goes in scripts/reviewed-images.txt as: ${hash}  ${file})`);
+    }
     continue;
   }
   scanText(content, file);
