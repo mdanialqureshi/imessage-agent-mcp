@@ -43,8 +43,8 @@ interface JsonRpc {
 /**
  * `connect`: the stdio MCP server that desktop apps (ChatGPT/Codex, Claude Desktop, Claude
  * Code, …) launch. It holds no permissions and reads nothing itself; it relays each JSON-RPC
- * message to the background service's Unix socket and writes the reply back. This is why
- * only the service needs Full Disk Access, not every app.
+ * message to the background service's Unix socket and writes the reply back. So no app
+ * needs Full Disk Access: only the reader holds it.
  */
 export function bridge(
   sock: string,

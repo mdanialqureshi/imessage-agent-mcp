@@ -22,6 +22,8 @@ const FORBIDDEN_FILES = [
   /\.log$/,
   /(^|\/)exports?\//,
   /\.export\.txt$/,
+  /\.(pem|p12|pfx|key)$/i,
+  /(^|\/)\.DS_Store$/,
 ];
 
 const PATTERNS = [

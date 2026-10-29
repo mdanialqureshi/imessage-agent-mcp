@@ -30,7 +30,10 @@
 - Confirm the same for Claude from the phone through the Claude desktop app
 - Clear "your Mac is offline" behavior in each agent
 
-### Hardening
+### ✅ Mac app
+- Menu bar app with a guided setup (pick Claude Code or Codex), bundled Node and reader; the reader runs from `~/Applications` and is put back if it goes missing
+- The service runs while the app is open (Open at login in Settings)
+- In-app updates from Ed25519-signed GitHub Releases
 
 ### M4: assistant layer
 - Person profiles: last contact, usual cadence, topics, open items both ways → `get_person`

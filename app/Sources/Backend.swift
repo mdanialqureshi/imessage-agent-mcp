@@ -3,7 +3,7 @@ import Security
 
 /// Runs the CLI bundled inside the app (Contents/Resources/app/src/cli.ts) with the app's own
 /// Node. The app itself holds no special permissions: only Messages Agent Reader, a separate
-/// program inside it, gets Full Disk Access.
+/// program it ships and copies to ~/Applications, gets Full Disk Access.
 enum Backend {
   static let bundle = Bundle.main.bundleURL
   static let node = bundle.appendingPathComponent("Contents/Helpers/node")
@@ -21,7 +21,7 @@ enum Backend {
 
   /// A downloaded copy carries macOS's download flag on every file. Approving the app in
   /// Privacy & Security lets the app itself open, but macOS still stops the programs inside it
-  /// that launchd starts directly (Node and the reader). Once the app runs, it was approved, so
+  /// that launchd starts directly (Node; the reader is copied out without the flag). Once the app runs, it was approved, so
   /// it clears the flag from its own files; its signature still seals every one of them.
   static func clearQuarantine() {
     guard !mustMove else { return }

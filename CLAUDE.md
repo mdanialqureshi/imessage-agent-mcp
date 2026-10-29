@@ -1,6 +1,6 @@
 # imessage-agent-mcp
 
-MCP server that reads iMessage on the user's Mac and exposes commitments, plans, replies owed and loose ends to any AI agent. TypeScript run directly by Node ≥ 23 (type stripping, no build step). Built-in `node:sqlite`, no native deps.
+MCP server that reads iMessage on the user's Mac and exposes commitments, plans, replies owed and loose ends to any AI agent. TypeScript run directly by Node ≥ 23.6 (type stripping, no build step). Built-in `node:sqlite`, no native deps.
 
 ## This is a public repository
 
@@ -14,13 +14,14 @@ The code reads private message history, and the repo is shared publicly. **Nothi
 
 ## Layout
 
-- `helper/reader.c` — the only part with Full Disk Access: copies `chat.db` and Contacts into the state dir; its own launchd job. A clone builds it as `~/Applications/Messages Agent Reader.app`; the Mac app ships one in `Contents/Helpers`
-- `app/` — the Mac app (SwiftUI menu bar + setup window). It holds no permissions and only runs the bundled CLI (`status --json`, `install-service`, `connect-app`, …); `scripts/build-app.mjs` builds it with the pinned Node, `test/app.test.ts` checks a build
+- `helper/reader.c` — the only part with Full Disk Access: copies `chat.db` and Contacts into the state dir; its own launchd job. A clone builds it as `~/Applications/Messages Agent Reader.app`; the Mac app ships one in `Contents/Helpers` and copies it to the same place (macOS attributes a program inside an app bundle to the app), putting it back on install and each launch if it's missing or changed
+- `app/` — the Mac app (SwiftUI menu bar + setup window). It holds no permissions and only runs the bundled CLI (`status --json`, `install-service`, `connect-app`, …); the service runs only while the app is open (`start-service` on launch, `stop-service` on quit; Open at login in Settings). `scripts/build-app.mjs` builds it with the pinned Node, `test/app.test.ts` checks a build
 - `src/messages/` — reading `chat.db` and Contacts (the reader's copy, in the service), conversation windows, privacy filters
 - `src/interpret/` — prompt, output schema, CLI runners, pipeline
 - `src/store.ts` — local state (items, runs) in `~/Library/Application Support/imessage-agent-mcp/`
 - `src/server.ts` — MCP tools and the background service (Unix socket only)
 - `src/bridge.ts` — `connect`, the stdio bridge apps launch
+- `src/update.ts` — Mac app updates from GitHub Releases: `SHA256SUMS.txt` signed with the Ed25519 release key (`UPDATE_PUBLIC_KEY`), zip listing and app signature checks
 - `src/apps.ts` — registering the bridge with ChatGPT/Codex, Claude desktop, Claude Code, Cursor
 - `src/cli.ts` — entry point, for both the terminal and the Mac app (`appBundle` in `src/config.ts` tells them apart)
 - `test/` — synthetic fixtures and tests (`npm test`)

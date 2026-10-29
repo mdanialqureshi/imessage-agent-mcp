@@ -242,7 +242,7 @@ Done. How it fits together:
   app running on this Mac, so the Mac needs to be on and awake. (Dot reaches the Mac this way, but doesn't list the
   imessage tools natively yet; it can use \`${callCommand()}\` meanwhile.)
 
-Next steps (also in the README, "Connect your agents"):
+Next steps (also in the README, "The message to your agent"):
   • Restart Claude desktop and ChatGPT desktop so they load the new connection.
   • Dot: in the ChatGPT desktop app, open your Dot's profile → Computers → Allow access.
   • Send your agent this once; it sets everything up and starts right away:
@@ -820,7 +820,7 @@ Setup
                        Change one setting, e.g. config set autoInterpretMinutes 60
   connect-app <id> | disconnect-app <id>
                        Connect or disconnect one app (chatgpt, claude-desktop, claude-code, cursor)
-  update [--check]      Get the latest version (a clone: git pull, npm ci, restart the service)
+  update [--check]      Get the latest version (a clone: move to the newest release tag, npm ci, restart the service)
   uninstall [--delete-data]
                        Disconnect apps and remove the service
 

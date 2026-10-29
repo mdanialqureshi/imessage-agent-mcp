@@ -29,8 +29,8 @@ Spawn a fresh security subagent so the review isn't anchored on your own reasoni
 Agent(subagent_type: "general-purpose", description: "Security audit before push", prompt: """
 You are auditing commits about to be pushed to a PUBLIC GitHub repository at <repo path>.
 The software reads a user's private iMessage database on macOS and exposes it to AI agents over MCP.
-Run `git log origin/main..HEAD --stat` (or `git log --stat` if there's no remote yet) and
-`git diff origin/main..HEAD` (or `git show` for every commit), and read any new or changed files in full.
+Run `git log origin/master..HEAD --stat` (or `git log --stat` if there's no remote yet) and
+`git diff origin/master..HEAD` (or `git show` for every commit), and read any new or changed files in full.
 
 Report findings with file:line, severity, and a concrete fix for:
 1. Secrets: API keys, tokens, passwords, private keys, OAuth client secrets, even in tests, docs or comments.
