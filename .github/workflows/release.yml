@@ -8,7 +8,9 @@ name: Release
 # tests, which do load dependencies, on a copy it downloads, so nothing it runs can change what
 # ships. `publish`, which only runs pinned GitHub actions and the runner's own tools, checks,
 # signs and uploads the files; nothing that runs project dependencies ever holds a token that
-# can write to the repo or the release key.
+# can write to the repo or the release key. `test` could still upload an artifact of its own
+# under the same name, so `publish` downloads `build`'s upload by its ID and checks
+# SHA256SUMS.txt against the hash `build` passed on in its job outputs.
 on:
   push:
     tags: ['v*']
@@ -21,6 +23,9 @@ permissions:
 jobs:
   build:
     runs-on: macos-latest
+    outputs:
+      artifact-id: ${{ steps.up.outputs.artifact-id }}
+      sums: ${{ steps.sums.outputs.sha256 }}
     steps:
       # Actions are pinned to commit SHAs so a moved tag can't change what runs.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,7 +58,11 @@ jobs:
         run: |
           prev=$(ls previous/*.zip 2>/dev/null | head -1)
           node scripts/build-app.mjs ${prev:+--reader-from "$prev"}
+      - name: Hash the checksums
+        id: sums
+        run: echo "sha256=$(shasum -a 256 dist/SHA256SUMS.txt | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: up
         with:
           name: release
           path: |
@@ -81,6 +90,7 @@ jobs:
           path: dist
       - name: Test the build
         run: |
+          (cd dist && shasum -a 256 -c SHA256SUMS.txt)
           ditto -x -k dist/Messages-Agent-*.zip dist/
           IMESSAGE_AGENT_APP='dist/Messages Agent.app' node --test test/app.test.ts
 
@@ -105,12 +115,15 @@ jobs:
         run: |
           git merge-base --is-ancestor "$GITHUB_SHA" origin/master
           test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      # By ID, not name: `build`'s own upload, whatever else the run uploaded.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: release
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
           path: dist
       - name: The files match their checksums
-        run: cd dist && sha256sum --check SHA256SUMS.txt
+        run: |
+          test "$(sha256sum dist/SHA256SUMS.txt | cut -d' ' -f1)" = "${{ needs.build.outputs.sums }}"
+          cd dist && sha256sum --check SHA256SUMS.txt
       # The app installs an update only if its checksums carry this signature. Signed with the
       # runner's own OpenSSL (nothing downloaded holds the key), then checked against the public
       # key the app ships with, so a release signed with the wrong key fails here.

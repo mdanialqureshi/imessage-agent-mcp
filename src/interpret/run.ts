@@ -23,7 +23,10 @@ import { InterpreterUnavailable, interpreter, type RawOp, ToolUseAttempt } from 
 const BATCH_CHARS = 60_000;
 /** A chat whose batch fails this many runs in a row is skipped, so it can't stall every run. */
 const MAX_CHAT_FAILURES = 3;
-/** Each stranger's chat costs its own interpreter call, so a flood of new senders can't use up the plan. */
+/**
+ * Each stranger's chat costs its own interpreter call, so a flood of new senders can't use up the
+ * plan. The rest wait for later runs.
+ */
 const MAX_STRANGER_CHATS = 20;
 
 const OPS = new Set(['create', 'update', 'done', 'cancel']);
@@ -73,7 +76,7 @@ export interface RunResult {
   discardedBatches: number;
   /** Batches that errored; their chats are retried next run, up to MAX_CHAT_FAILURES. */
   failedBatches: number;
-  /** Chats skipped after failing MAX_CHAT_FAILURES runs in a row. */
+  /** Chats skipped after failing MAX_CHAT_FAILURES runs in a row, or strangers' chats left for a later run. */
   skippedChats: number;
   prompts?: string[];
 }
@@ -120,6 +123,7 @@ function batches(windows: Window[], transcripts: Map<string, string>, isolate: (
 }
 
 function toFields(op: RawOp, w: Window, conv: Conversations): ItemFields {
+  const stranger = conv.fromStranger(w.chat);
   const byRowid = new Map<number, Message>([...w.context, ...w.fresh].map((m) => [m.rowid, m]));
   const evidence: Evidence[] = op.evidence
     .map((id) => byRowid.get(id))
@@ -134,7 +138,8 @@ function toFields(op: RawOp, w: Window, conv: Conversations): ItemFields {
     kind: op.kind as Kind,
     chatGuid: w.chat.guid,
     chatId: w.chat.id,
-    chatLabel: w.label,
+    // A group's name is chosen by its members, so a stranger's chat goes by its people instead.
+    chatLabel: stranger ? conv.peopleLabel(w.chat) : w.label,
     person: op.person,
     title: op.title,
     detail: op.detail,
@@ -147,7 +152,7 @@ function toFields(op: RawOp, w: Window, conv: Conversations): ItemFields {
     suggestedAction: op.suggested_action,
     missingDetails: op.missing_details,
     evidence,
-    unknownSender: conv.hasUnknownSender(w.chat),
+    unknownSender: stranger,
   };
 }
 
@@ -216,16 +221,24 @@ export async function interpretNow(
   const runId = opts.dryRun ? null : store.startRun(config.interpreter);
   try {
     const conv = new Conversations(db, Contacts.load(), config);
-    // Someone marked private later: what was already noted from their chats goes too.
     if (!opts.dryRun) {
       for (const chatId of store.chatIdsWithItems()) {
         const chat = db.chat(chatId);
-        if (chat && conv.isExcluded(chat)) store.deleteItemsForChat(chatId);
+        if (!chat) continue;
+        // Someone marked private later: what was already noted from their chats goes too.
+        if (conv.isExcluded(chat)) store.deleteItemsForChat(chat.guid);
+        // Someone removed from Contacts (or a stranger added to a group): treated as a stranger from now on.
+        else if (conv.fromStranger(chat)) store.markFromStranger(chat.guid, conv.peopleLabel(chat));
       }
     }
     const lastRowid = Number(store.getMeta('last_rowid') ?? 0);
-    const lookbackDays = lastRowid ? 30 : config.firstRunLookbackDays;
-    const fresh = db.newMessages(lastRowid, new Date(now.getTime() - lookbackDays * 86400_000));
+    const since = new Date(now.getTime() - (lastRowid ? 30 : config.firstRunLookbackDays) * 86400_000);
+    // Strangers' chats past the cap last time, each with the first message still to read.
+    const deferred: Record<string, number> = JSON.parse(store.getMeta('deferred_chats') ?? '{}');
+    const fresh = [
+      ...Object.entries(deferred).flatMap(([chatId, from]) => db.newMessages(from - 1, since, Number(chatId)).filter((m) => m.rowid <= lastRowid)),
+      ...db.newMessages(lastRowid, since),
+    ].sort((a, b) => a.rowid - b.rowid);
     const newWindows = conv.windowsForNew(fresh);
     const replyChecked = new Map<number, number>(Object.entries(JSON.parse(store.getMeta('reply_checked') ?? '{}')).map(([k, v]) => [Number(k), Number(v)]));
     const awaiting = conv.windowsAwaitingReply(now, replyChecked, new Set(newWindows.map((w) => w.chat.id)));
@@ -238,14 +251,18 @@ export async function interpretNow(
     // deleted) before the interpreter runs, which can take minutes.
     const transcripts = new Map(all.map((w) => [w.ref, conv.render(w)]));
     const isolated = new Set(all.filter((w) => conv.hasUnknownSender(w.chat)).map((w) => w.ref));
+    // Without Contacts every chat is isolated, but none counts against the cap.
+    const strangerRefs = new Set(all.filter((w) => conv.fromStranger(w.chat)).map((w) => w.ref));
     const maxRowid = db.maxRowid();
     db.close();
     dbOpen = false;
 
     const failures: Record<string, number> = JSON.parse(store.getMeta('chat_failures') ?? '{}');
     let strangers = 0;
+    const later: Window[] = [];
     const runnable = all.filter((w) => {
-      if (isolated.has(w.ref) && ++strangers > MAX_STRANGER_CHATS) {
+      if (strangerRefs.has(w.ref) && ++strangers > MAX_STRANGER_CHATS) {
+        later.push(w);
         result.skippedChats++;
         return false;
       }
@@ -300,7 +317,11 @@ export async function interpretNow(
 
     if (!opts.dryRun) {
       store.setMeta('last_rowid', String(Math.max(lastRowid, maxRowid)));
-      for (const w of awaiting) replyChecked.set(w.chat.id, w.fresh[0].rowid);
+      // Chats left for later are read from where they were left (an unanswered one is simply found again).
+      const nextDeferred: Record<string, number> = {};
+      for (const w of later) if (w.reason === 'new_messages') nextDeferred[w.chat.id] = deferred[w.chat.id] ?? w.fresh[0].rowid;
+      store.setMeta('deferred_chats', JSON.stringify(nextDeferred));
+      for (const w of awaiting) if (!later.includes(w)) replyChecked.set(w.chat.id, w.fresh[0].rowid);
       store.setMeta('reply_checked', JSON.stringify(Object.fromEntries(replyChecked)));
       store.setMeta('last_interpreted_at', now.toISOString());
       store.finishRun(runId!, result);

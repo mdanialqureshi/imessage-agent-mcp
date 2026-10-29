@@ -1,6 +1,6 @@
 import type { Config } from '../config.ts';
 import type { Chat, ChatDb, Message } from './chatdb.ts';
-import { clip, oneLine } from '../text.ts';
+import { clip, oneLine, visible } from '../text.ts';
 import { type Contacts, handleKey, isShortCode } from './contacts.ts';
 
 export interface Window {
@@ -19,20 +19,36 @@ const MAX_MESSAGE_CHARS = 2000;
 const MAX_WINDOW_CHARS = 40_000;
 
 const VERIFICATION_CODE =
-  /\b(codes?|passcode|password|verification|verify|OTP|one[- ]time|2FA|MFA|security|PIN|log[- ]?in|sign[- ]?in|auth\w*|confirm\w*)\b/i;
+  /\b(codes?|passcode|password|verification|verify|OTP|one[- ]time|2FA|MFA|security|log[- ]?in|sign[- ]?in|authenticat\w*)\b/i;
+/** Only in capitals: "pin the meeting" is a verb. */
+const PIN = /\bPIN\b/;
 /** The same words in other common languages (no \b: it only knows ASCII letters). */
 const VERIFICATION_CODE_INTL =
   /c[oó]digo|verificaci[oó]n|contraseña|senha|bestätigung|sicherheitscode|kennwort|mot de passe|vérification|codice|verifica|weryfikac|код|验证码|驗證碼|認証|確認コード|인증/i;
+/** How close (in characters) one of those words must be to the digits. */
+const NEAR = 40;
 
-/** A code: 4–8 digits, maybe split by spaces or dashes ("123 456", "48-29-13"). */
-const hasCode = (text: string) =>
-  (text.match(/\d+(?:[ -]\d+)*/g) ?? []).some((run) => {
-    const digits = run.replace(/\D/g, '').length;
-    return digits >= 4 && digits <= 8;
-  });
+/**
+ * Digits, maybe split by dashes or slashes ("48-29-13"), or by spaces between groups of three or
+ * more ("123 456", not a time like "10 30").
+ */
+const DIGIT_RUNS = /\d+(?:[-/]\d+|\s\d{3,})*/g;
+/** Not codes: dates (2026-11-03, 11-14-2026, 11/14/2026) and local phone numbers (555-0123). */
+const NOT_A_CODE = /^(?:\d{4}([-/])\d{1,2}\1\d{1,2}|\d{1,2}([-/])\d{1,2}\2\d{4}|\d{3}[-\s]\d{4})$/;
 
-export function isFilteredText(text: string): boolean {
-  return (VERIFICATION_CODE.test(text) || VERIFICATION_CODE_INTL.test(text)) && hasCode(text);
+/**
+ * A code: 4–8 digits with a code word near them. Invisible characters are removed first, so they
+ * can't split the word from the digits ("c\u200bode").
+ */
+export function isFilteredText(raw: string): boolean {
+  const text = visible(raw);
+  for (const m of text.matchAll(DIGIT_RUNS)) {
+    const digits = m[0].replace(/\D/g, '').length;
+    if (digits < 4 || digits > 8 || NOT_A_CODE.test(m[0])) continue;
+    const around = text.slice(Math.max(0, m.index - NEAR), m.index + m[0].length + NEAR);
+    if (VERIFICATION_CODE.test(around) || PIN.test(around) || VERIFICATION_CODE_INTL.test(around)) return true;
+  }
+  return false;
 }
 
 /**
@@ -71,15 +87,27 @@ export class Conversations {
     });
   }
 
-  /** True when anyone in the chat isn't a saved contact. */
+  /** True when anyone in the chat isn't a saved contact (everyone, without Contacts). Such a chat is interpreted alone. */
   hasUnknownSender(chat: Chat): boolean {
     const others = chat.handles.length ? chat.handles : [chat.identifier];
     return others.some((h) => this.contacts.name(h) === null);
   }
 
+  /**
+   * True when someone in the chat isn't in Contacts, so their words are kept out of the brief.
+   * Without Contacts (a missing or empty copy) everyone would count, so nobody does.
+   */
+  fromStranger(chat: Chat): boolean {
+    return this.contacts.size > 0 && this.hasUnknownSender(chat);
+  }
+
   /** Group names are set by other people, so they get the same one-line treatment as messages. */
   chatLabel(chat: Chat): string {
-    if (chat.displayName) return displayText(chat.displayName);
+    return chat.displayName ? displayText(chat.displayName) : this.peopleLabel(chat);
+  }
+
+  /** The chat's people by name or number, never a name someone else chose for the group. */
+  peopleLabel(chat: Chat): string {
     const names = chat.handles.map((h) => displayText(this.contacts.label(h)));
     return names.join(', ') || displayText(chat.identifier);
   }

@@ -216,8 +216,14 @@ export class Store {
     return (this.db.prepare('SELECT DISTINCT chat_id FROM items').all() as { chat_id: number }[]).map((r) => Number(r.chat_id));
   }
 
-  deleteItemsForChat(chatId: number): void {
-    this.db.prepare('DELETE FROM items WHERE chat_id = ?').run(chatId);
+  /** By guid: a chat's ROWID can point at a different chat after Messages rebuilds its database. */
+  deleteItemsForChat(chatGuid: string): void {
+    this.db.prepare('DELETE FROM items WHERE chat_guid = ?').run(chatGuid);
+  }
+
+  /** Someone in the chat is no longer in Contacts: its items are labelled by its people and keep their words out of the brief. */
+  markFromStranger(chatGuid: string, chatLabel: string): void {
+    this.db.prepare('UPDATE items SET unknown_sender = 1, chat_label = ? WHERE chat_guid = ? AND unknown_sender = 0').run(chatLabel, chatGuid);
   }
 
   createItem(fields: ItemFields): Item {
@@ -247,6 +253,8 @@ export class Store {
     const seen = new Set(existing.evidence.map((e) => e.rowid));
     const evidence = [...existing.evidence, ...fields.evidence.filter((e) => !seen.has(e.rowid))];
     const hasTime = fields.whenStart !== null;
+    // Once a stranger's, an item keeps its people label (a contact's update would bring back the group's name).
+    const chatLabel = existing.unknownSender && !fields.unknownSender ? existing.chatLabel : fields.chatLabel;
     this.db
       .prepare(
         `UPDATE items SET kind = ?, person = ?, title = ?, detail = ?, when_start = ?, when_end = ?, when_text = ?,
@@ -258,7 +266,7 @@ export class Store {
         hasTime ? fields.whenStart : existing.whenStart, hasTime ? fields.whenEnd : existing.whenEnd,
         fields.whenText ?? existing.whenText, hasTime ? fields.precision : existing.precision,
         fields.strength, fields.confidence, fields.suggestedAction,
-        JSON.stringify(fields.missingDetails), JSON.stringify(evidence), fields.chatLabel,
+        JSON.stringify(fields.missingDetails), JSON.stringify(evidence), chatLabel,
         fields.unknownSender || existing.unknownSender ? 1 : 0, new Date().toISOString(), id,
       );
   }

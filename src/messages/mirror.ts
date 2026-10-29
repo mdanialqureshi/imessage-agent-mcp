@@ -135,6 +135,7 @@ export function installReader(
     const fresh = readerCdHash(tmp);
     if (!fresh) throw new Error("the reader's signature didn't verify after building it");
     fs.writeFileSync(stamp, `${hash} ${fresh}\n`, { mode: 0o600 });
+    fs.chmodSync(stamp, 0o600); // The mode above only applies to a new file.
   });
 }
 
@@ -233,19 +234,34 @@ function pathsOnTheWay(file: string): string[] {
 /**
  * The code the service loads (everything under each of `roots`) must be only yours to change,
  * like the program itself: other accounts can't own, write to or (by access-control list) change
- * any file or folder in it.
+ * any file or folder in it. A link inside is checked like a program (who can repoint it), and
+ * where it leads is checked as part of the tree.
  */
 export function assertTreeOnlyYoursToChange(roots: string[]): void {
+  const seen = new Set<string>(); // Real paths already walked, so links that loop end.
   const walk = (p: string) => {
-    checkModes(p, fs.lstatSync(p));
-    if (fs.lstatSync(p).isDirectory()) for (const name of fs.readdirSync(p)) walk(path.join(p, name));
+    const st = fs.lstatSync(p);
+    if (st.isSymbolicLink()) {
+      assertOnlyYoursToChange(p);
+      return visit(fs.realpathSync(p));
+    }
+    checkModes(p, st);
+    if (st.isDirectory()) for (const name of fs.readdirSync(p)) walk(path.join(p, name));
+  };
+  const visit = (real: string) => {
+    if (seen.has(real)) return;
+    seen.add(real);
+    walk(real);
+    if (process.platform !== 'darwin') return;
+    const ls = spawnSync('/bin/ls', ['-leR', real], { encoding: 'utf8', maxBuffer: 64 << 20 });
+    if (ls.error || ls.status !== 0) throw new Error(`Couldn't read the access-control lists in ${real} (${ls.error?.message ?? ls.stderr.trim()}).`);
+    if (aclLetsOthersWrite(ls.stdout)) {
+      throw new Error(`Something in ${real} could be changed by another account on this Mac (an access-control list lets others write to it), and the background service would run it as you.`);
+    }
   };
   for (const root of roots) {
     assertOnlyYoursToChange(root);
-    walk(root);
-    if (process.platform === 'darwin' && aclLetsOthersWrite(spawnSync('/bin/ls', ['-leR', root], { encoding: 'utf8', maxBuffer: 64 << 20 }).stdout ?? '')) {
-      throw new Error(`Something in ${root} could be changed by another account on this Mac (an access-control list lets others write to it), and the background service would run it as you.`);
-    }
+    visit(fs.realpathSync(root));
   }
 }
 

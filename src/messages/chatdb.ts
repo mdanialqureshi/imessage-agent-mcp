@@ -198,12 +198,12 @@ export class ChatDb {
     };
   }
 
-  /** Messages with ROWID above `afterRowid` and newer than `since`, oldest first. */
-  newMessages(afterRowid: number, since: Date): Message[] {
+  /** Messages with ROWID above `afterRowid` and newer than `since` (in one chat, if given), oldest first. */
+  newMessages(afterRowid: number, since: Date, chatId?: number): Message[] {
     const sinceNs = BigInt(since.getTime() - APPLE_EPOCH_MS) * 1000000n;
     const rows = this.db
-      .prepare(`${this.messageSelect()} AND m.ROWID > ? AND m.date > ? ORDER BY m.ROWID`)
-      .all(afterRowid, sinceNs) as Record<string, any>[];
+      .prepare(`${this.messageSelect()} AND m.ROWID > ? AND m.date > ?${chatId === undefined ? '' : ' AND cmj.chat_id = ?'} ORDER BY m.ROWID`)
+      .all(afterRowid, sinceNs, ...(chatId === undefined ? [] : [chatId])) as Record<string, any>[];
     return rows.map((r) => this.toMessage(r));
   }
 

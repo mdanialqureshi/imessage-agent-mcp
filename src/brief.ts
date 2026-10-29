@@ -28,9 +28,10 @@ function whenLabel(i: Item): string {
 
 
 /**
- * `evidence` is how many quotes to show. A stranger's words stay out of the brief (agents read
- * it unattended on a schedule), so a text from anyone can't hand them instructions; `get_item`
- * shows them, labelled, when someone looks at the item on purpose.
+ * `evidence` is how many quotes to show. A stranger's quotes and details stay out of the brief
+ * (agents read it unattended on a schedule), so a text from anyone can't hand them instructions;
+ * `get_item` shows them, labelled, when someone looks at the item on purpose. Their chat is
+ * labelled by its people (stored at interpretation), never by a group name they chose.
  */
 export function formatItem(i: Item, opts: { since?: string; evidence?: number; strangerQuotes?: boolean } = {}): string {
   const isNew = opts.since && i.createdAt > opts.since ? '🆕 ' : '';
@@ -39,11 +40,11 @@ export function formatItem(i: Item, opts: { since?: string; evidence?: number; s
     .filter(Boolean)
     .join(' · ');
   const lines = [`- ${isNew}**${plain(i.title)}** — ${plain(i.chatLabel)} · ${meta} · \`${i.id}\``];
-  if (i.detail) lines.push(`  ${plain(i.detail)}`);
-  if (i.missingDetails.length) lines.push(`  Missing: ${plain(i.missingDetails.join(', '))}`);
   if (i.unknownSender && !opts.strangerQuotes) {
-    if (i.evidence.length) lines.push(`  (Quotes hidden: from someone not in Contacts. get_item shows them.)`);
+    if (i.evidence.length || i.detail || i.missingDetails.length) lines.push(`  (Quotes and details hidden: from someone not in Contacts. get_item shows them.)`);
   } else {
+    if (i.detail) lines.push(`  ${plain(i.detail)}`);
+    if (i.missingDetails.length) lines.push(`  Missing: ${plain(i.missingDetails.join(', '))}`);
     for (const e of i.evidence.slice(-(opts.evidence ?? 2))) lines.push(`  > ${plain(e.from)} (${e.date}): ${plain(e.text)}`);
   }
   if (i.suggestedAction !== 'none') lines.push(`  Suggested: ${oneLine(i.suggestedAction).replace('_', ' ')}`);

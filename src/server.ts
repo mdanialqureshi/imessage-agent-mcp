@@ -232,10 +232,14 @@ export function createServer(config: Config): McpServer {
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async () => {
-      // A refresh just finished: there's nothing new to read yet, and a looping agent can't spend the plan.
+      // A refresh just finished (or failed): there's nothing new to read yet, and a looping agent can't spend the plan.
       const last = running ? null : withStore((s) => s.lastRun());
-      if (last?.finished_at && !last.error && Date.now() - new Date(last.finished_at).getTime() < REFRESH_MIN_GAP_MS) {
-        return text('Messages were read less than a minute ago. Call get_brief.');
+      if (last && Date.now() - new Date(last.finished_at ?? last.started_at).getTime() < REFRESH_MIN_GAP_MS) {
+        return text(
+          last.error
+            ? `The last read finished less than a minute ago (${clip(oneLine(String(last.error)), 300)}). Try again in a minute.`
+            : 'Messages were read less than a minute ago. Call get_brief.',
+        );
       }
       const run = startInterpretation();
       const timeout = new Promise<null>((r) => setTimeout(() => r(null), REFRESH_WAIT_MS));
