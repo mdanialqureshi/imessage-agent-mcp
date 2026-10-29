@@ -287,7 +287,7 @@ function checkChain(start: string): void {
 }
 
 /** Access-control permissions that let someone change a file or what a folder holds. */
-const ACL_WRITES = new Set(['write', 'append', 'writeextattr', 'writesecurity', 'chown', 'add_file', 'add_subdirectory', 'delete_child']);
+const ACL_WRITES = new Set(['write', 'append', 'writeextattr', 'writesecurity', 'chown', 'delete', 'add_file', 'add_subdirectory', 'delete_child']);
 
 /** Whether an access-control list lets anyone else write to, add to or delete from p. */
 function sharedByAcl(p: string): boolean {

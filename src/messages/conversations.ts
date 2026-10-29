@@ -41,7 +41,8 @@ const NOT_A_CODE = /^(?:\d{4}([-/])\d{1,2}\1\d{1,2}|\d{1,2}([-/])\d{1,2}\2\d{4}|
  * can't split the word from the digits ("c\u200bode").
  */
 export function isFilteredText(raw: string): boolean {
-  const text = visible(raw);
+  // Only the start of a message is ever shown (see displayText); this checks all of that and more.
+  const text = visible(raw.slice(0, MAX_MESSAGE_CHARS * 4));
   for (const m of text.matchAll(DIGIT_RUNS)) {
     const digits = m[0].replace(/\D/g, '').length;
     if (digits < 4 || digits > 8 || NOT_A_CODE.test(m[0])) continue;

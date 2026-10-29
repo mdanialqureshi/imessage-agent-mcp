@@ -3,18 +3,23 @@ const LINE_BREAKS = /[\n\v\f\r\x1c-\x1e\x85\u2028\u2029]+/;
 /** Remaining C0/C1 control characters (tabs are kept). */
 const CONTROL = /[\x00-\x08\x0e-\x1b\x1f\x7f-\x84\x86-\x9f]/g;
 /**
- * Characters a reader can't see but a model reads: zero-width characters, direction overrides,
- * Unicode tag characters and variation selectors (which can spell out hidden instructions), soft
- * hyphens and blank fillers (Hangul, Khmer, Mongolian). Emoji keep their joiner (U+200D) and one
- * variation selector (VS16); the few flags spelled with tags show as a plain black flag.
+ * Characters a reader can't see but a model reads, by Unicode's own definition: everything
+ * "default ignorable" or a format character (zero-width characters, direction controls, tag
+ * characters, variation selectors, which can spell out hidden instructions), plus the blank
+ * fillers that render as nothing (Braille, Hangul).
  */
-const INVISIBLE =
-  /[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180e\u200b\u200c\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\u3164\ufeff\uffa0\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}]/gu;
-/** Runs of variation selectors, kept to the first: an emoji needs at most one. */
-const SELECTOR_RUNS = /([\ufe00-\ufe0f])[\ufe00-\ufe0f]+/g;
+const INVISIBLE = /(?![\u200d\ufe0f])[\p{Default_Ignorable_Code_Point}\p{Cf}\u2800\u3164\uffa0]/gu;
+/** Emoji keep a joiner (U+200D) only between two emoji... */
+const STRAY_JOINER = /(?<![\p{Extended_Pictographic}\p{Emoji_Modifier}\ufe0f])\u200d|\u200d(?!\p{Extended_Pictographic})/gu;
+/** ...and one emoji presentation selector (U+FE0F) right after an emoji or keycap. */
+const STRAY_SELECTOR = /(?<![\p{Extended_Pictographic}0-9#*])\ufe0f/gu;
 
-/** Text without the control and invisible characters that could hide something from a reader. */
-export const visible = (text: string) => text.replace(CONTROL, '').replace(INVISIBLE, '').replace(SELECTOR_RUNS, '$1');
+/**
+ * Text without the control and invisible characters that could hide something from a reader.
+ * Flags spelled with tags show as a plain black flag.
+ */
+export const visible = (text: string) =>
+  text.replace(CONTROL, '').replace(INVISIBLE, '').replace(STRAY_SELECTOR, '').replace(STRAY_JOINER, '');
 
 /**
  * Untrusted text (messages, group names, model output) on one line, so it can't forge

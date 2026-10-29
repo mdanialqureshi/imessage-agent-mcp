@@ -222,8 +222,8 @@ export async function interpretNow(
   try {
     const conv = new Conversations(db, Contacts.load(), config);
     if (!opts.dryRun) {
-      for (const chatId of store.chatIdsWithItems()) {
-        const chat = db.chat(chatId);
+      for (const guid of store.chatGuidsWithItems()) {
+        const chat = db.chatByGuid(guid);
         if (!chat) continue;
         // Someone marked private later: what was already noted from their chats goes too.
         if (conv.isExcluded(chat)) store.deleteItemsForChat(chat.guid);

@@ -253,6 +253,12 @@ export class ChatDb {
     return rows.map((r) => this.toMessage(r));
   }
 
+  /** The chat with this guid now, whatever its ROWID. */
+  chatByGuid(guid: string): Chat | null {
+    const row = this.db.prepare('SELECT ROWID AS id FROM chat WHERE guid = ?').get(guid) as { id: number } | undefined;
+    return row ? this.chat(Number(row.id)) : null;
+  }
+
   chat(chatId: number): Chat | null {
     const cached = this.chatCache.get(chatId);
     if (cached) return cached;

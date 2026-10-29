@@ -1,5 +1,5 @@
 import type { Item, Store } from './store.ts';
-import { oneLine } from './text.ts';
+import { clip, oneLine } from './text.ts';
 
 const ACTIVE = ['open'];
 const SAVED_KINDS = new Set(['fact', 'recommendation']);
@@ -17,13 +17,14 @@ function addDays(d: Date, days: number): Date {
 /** Untrusted text on one line, without the markup that could fake an item id, emphasis or a Markdown link. */
 const plain = (text: string) => oneLine(text).replace(/[`*[\]<>]/g, '');
 
-function whenLabel(i: Item): string {
-  if (!i.whenStart) return plain(i.whenText ?? '');
+/** The item's date; `withText` adds the words it came from (model output from the message). */
+function whenLabel(i: Item, withText = true): string {
+  if (!i.whenStart) return withText ? plain(i.whenText ?? '') : '';
   const date = new Date(i.whenStart.length === 10 ? `${i.whenStart}T12:00` : i.whenStart);
-  if (Number.isNaN(date.getTime())) return plain(i.whenText ?? i.whenStart);
+  if (Number.isNaN(date.getTime())) return withText ? plain(i.whenText ?? i.whenStart) : '';
   const day = date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   const time = i.precision === 'exact' ? ' ' + date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : '';
-  return `${day}${time}${i.whenText ? ` ("${plain(i.whenText)}")` : ''}`;
+  return `${day}${time}${withText && i.whenText ? ` ("${plain(i.whenText)}")` : ''}`;
 }
 
 
@@ -35,12 +36,15 @@ function whenLabel(i: Item): string {
  */
 export function formatItem(i: Item, opts: { since?: string; evidence?: number; strangerQuotes?: boolean } = {}): string {
   const isNew = opts.since && i.createdAt > opts.since ? '🆕 ' : '';
+  // A stranger's item shows as little model-written text as can still say what it is.
+  const hidden = i.unknownSender && !opts.strangerQuotes;
   // Item text is model output derived from untrusted messages; none of it may add lines.
-  const meta = [i.kind, whenLabel(i), i.strength !== 'firm' ? oneLine(i.strength) : '', `${Math.round(i.confidence * 100)}%`, i.unknownSender ? '⚠ not in Contacts' : '']
+  const meta = [i.kind, whenLabel(i, !hidden), i.strength !== 'firm' ? oneLine(i.strength) : '', `${Math.round(i.confidence * 100)}%`, i.unknownSender ? '⚠ not in Contacts' : '']
     .filter(Boolean)
     .join(' · ');
-  const lines = [`- ${isNew}**${plain(i.title)}** — ${plain(i.chatLabel)} · ${meta} · \`${i.id}\``];
-  if (i.unknownSender && !opts.strangerQuotes) {
+  const title = hidden ? clip(plain(i.title), 60) : plain(i.title);
+  const lines = [`- ${isNew}**${title}** — ${plain(i.chatLabel)} · ${meta} · \`${i.id}\``];
+  if (hidden) {
     if (i.evidence.length || i.detail || i.missingDetails.length) lines.push(`  (Quotes and details hidden: from someone not in Contacts. get_item shows them.)`);
   } else {
     if (i.detail) lines.push(`  ${plain(i.detail)}`);

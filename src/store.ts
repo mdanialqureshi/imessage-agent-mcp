@@ -212,8 +212,8 @@ export class Store {
     );
   }
 
-  chatIdsWithItems(): number[] {
-    return (this.db.prepare('SELECT DISTINCT chat_id FROM items').all() as { chat_id: number }[]).map((r) => Number(r.chat_id));
+  chatGuidsWithItems(): string[] {
+    return (this.db.prepare('SELECT DISTINCT chat_guid FROM items WHERE chat_guid IS NOT NULL').all() as { chat_guid: string }[]).map((r) => String(r.chat_guid));
   }
 
   /** By guid: a chat's ROWID can point at a different chat after Messages rebuilds its database. */
