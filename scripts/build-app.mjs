@@ -3,13 +3,16 @@
 // bundles Node, this project's source and a prebuilt reader, so nothing else needs installing.
 //
 //   node scripts/build-app.mjs [--out dist] [--arch universal|native] [--no-package] [--reader-from <previous .zip or .app>]
+//                              [--identity "Developer ID Application: …" [--notarize <notarytool keychain profile>]]
 //
 // Writes <out>/Messages Agent.app and, unless --no-package, a .dmg, a .zip and SHA256SUMS.txt
 // for a GitHub release. Needs macOS with Apple's Command Line Tools (Swift and clang), and
 // downloads the pinned Node release once, checking its SHA-256.
 //
-// The app is ad-hoc signed (no Apple Developer account), so people opening a download confirm
-// it once in System Settings → Privacy & Security → Open Anyway.
+// Without --identity the app is ad-hoc signed (no Apple Developer account needed), so people
+// opening a download confirm it once in System Settings → Privacy & Security → Open Anyway.
+// With a Developer ID identity, everything is signed with it (hardened runtime, secure
+// timestamp), and --notarize has Apple notarize the app and the disk image and staples both.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
@@ -53,6 +56,12 @@ const native = os.arch() === 'arm64' ? 'arm64' : 'x86_64';
 const archs = opt('arch', 'universal') === 'native' ? [native] : ['arm64', 'x86_64'];
 const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 const cache = path.join(os.homedir(), 'Library/Caches/imessage-agent-mcp-build');
+
+const identity = opt('identity', null);
+const notaryProfile = opt('notarize', null);
+if (notaryProfile && !identity) throw new Error('--notarize needs --identity');
+const team = identity && /\(([A-Z0-9]{10})\)$/.exec(identity)?.[1];
+if (identity && !team) throw new Error('--identity must be a full Developer ID name, ending in its team ID, like "Developer ID Application: Name (TEAMID)"');
 
 const run = (cmd, argv, opts = {}) => execFileSync(cmd, argv, { stdio: [opts.input === undefined ? 'ignore' : 'pipe', 'pipe', 'inherit'], ...opts });
 const step = (text) => console.log(`• ${text}`);
@@ -102,9 +111,10 @@ try {
   const node = path.join(contents, 'Helpers/node');
   run('/usr/bin/lipo', ['-create', ...nodes, '-output', node]);
   fs.chmodSync(node, 0o755);
-  // Re-signed after merging. Not with the hardened runtime: V8 needs to generate code, and Node
-  // holds no special permissions anyway.
-  run('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', 'com.imessage-agent-mcp.node', node]);
+  // Re-signed after merging. Notarization needs the hardened runtime, with one exception for
+  // V8's generated code (app/node.entitlements); ad hoc, it's left without, since Node holds no
+  // special permissions anyway.
+  sign(node, ['--identifier', 'com.imessage-agent-mcp.node', ...(identity ? ['--options', 'runtime', '--entitlements', path.join(root, 'app/node.entitlements')] : [])]);
 
   step('Icon');
   const iconTool = path.join(work, 'make-icon');
@@ -131,6 +141,8 @@ try {
     console.log('  reusing the previous release\'s reader (unchanged)');
   } else {
     compileReader(path.join(root, 'helper/reader.c'), path.join(contents, 'Helpers/Messages Agent Reader.app'), archs.flatMap((a) => ['-arch', a]), path.join(contents, 'Resources/AppIcon.icns'));
+    // compileReader signs it ad hoc, as a clone does; a release signs it with its identity.
+    if (identity) sign(readerDest, ['--options', 'runtime', '--identifier', 'com.imessage-agent-mcp.reader']);
   }
   fs.writeFileSync(path.join(contents, 'Resources/reader-inputs.sha256'), readerInputs + '\n');
 
@@ -177,8 +189,16 @@ try {
 
   step('Signing');
   // Nested code is signed first (above); this seals the rest, including the server source.
-  run('/usr/bin/codesign', ['--force', '--sign', '-', '--options', 'runtime', '--identifier', APP_ID, app]);
+  sign(app, ['--options', 'runtime', '--identifier', APP_ID]);
   run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]);
+  if (notaryProfile) {
+    step('Notarizing the app');
+    const upload = path.join(work, 'notarize.zip');
+    run('/usr/bin/ditto', ['-c', '-k', '--keepParent', app, upload]);
+    notarize(upload);
+    fs.rmSync(upload);
+    staple(app);
+  }
 
   const results = [app];
   if (!args.includes('--no-package')) {
@@ -187,6 +207,12 @@ try {
     const dmg = path.join(work, `${name}.dmg`);
     const zip = path.join(work, `${name}.zip`);
     buildDmg(dmg);
+    if (identity) sign(dmg);
+    if (notaryProfile) {
+      step('Notarizing the disk image');
+      notarize(dmg);
+      staple(dmg);
+    }
     // Without extended attributes, ACLs or resource forks (ditto stores those as "._" entries,
     // which the updater refuses): the app's files and its signature are all it needs.
     run('/usr/bin/ditto', ['-c', '-k', '--norsrc', '--noextattr', '--noacl', '--keepParent', app, zip]);
@@ -210,6 +236,36 @@ try {
   console.log(`Built ${path.join(out, `${APP_NAME}.app`)}`);
 } finally {
   fs.rmSync(work, { recursive: true, force: true });
+}
+
+/** Signs ad hoc, or with --identity and a secure timestamp (which notarization requires). */
+function sign(target, extra = []) {
+  run('/usr/bin/codesign', ['--force', '--sign', identity ?? '-', ...(identity ? ['--timestamp'] : []), ...extra, target]);
+}
+
+/**
+ * Submits a file to Apple with the notarytool keychain profile (its credentials stay in the
+ * keychain) and waits. On a rejection, prints Apple's log, which says which file failed and why.
+ */
+function notarize(file) {
+  const profile = ['--keychain-profile', notaryProfile];
+  const res = spawnSync('/usr/bin/xcrun', ['notarytool', 'submit', file, ...profile, '--wait', '--output-format', 'json'], { encoding: 'utf8' });
+  let result;
+  try {
+    result = JSON.parse(res.stdout);
+  } catch {
+    throw new Error(`notarytool couldn't submit ${path.basename(file)}: ${(res.stderr || res.stdout).trim()}`);
+  }
+  if (result.status !== 'Accepted') {
+    const log = result.id ? spawnSync('/usr/bin/xcrun', ['notarytool', 'log', result.id, ...profile], { encoding: 'utf8' }).stdout : '';
+    throw new Error(`Apple didn't notarize ${path.basename(file)} (${result.status ?? 'no status'}): ${result.message ?? ''}\n${log}`);
+  }
+  console.log(`  accepted (${result.id})`);
+}
+
+function staple(target) {
+  run('/usr/bin/xcrun', ['stapler', 'staple', target]);
+  run('/usr/bin/xcrun', ['stapler', 'validate', target]);
 }
 
 /**
@@ -357,6 +413,12 @@ function previousReader(from, inputs) {
     /^Identifier=com\.imessage-agent-mcp\.reader$/m.test(sig) &&
     /flags=0x\w+\([^)]*runtime/.test(sig);
   if (!ok) throw new Error("the previous release's reader doesn't verify; not reusing it");
+  // Only a reader signed the way this build signs: ad hoc for ad hoc, this team for an identity.
+  const signedBy = /^TeamIdentifier=(.+)$/m.exec(sig)?.[1];
+  if (signedBy !== (team ?? 'not set')) {
+    console.log("  the previous release's reader was signed differently; building a fresh one");
+    return null;
+  }
   return reader;
 }
 
@@ -527,8 +589,9 @@ function assertLayoutIsClean(buf, layoutName) {
   const allowed = new Set(['.:bwsp', '.:icvp', '.:vSrn', `${APP_NAME}.app:Iloc`, 'Applications:Iloc']);
   const extra = readDsStore(buf).filter((r) => !allowed.has(`${r.name}:${r.code}`));
   if (extra.length) throw new Error(`the disk image layout has unexpected records: ${extra.map((r) => `${r.name}:${r.code}`).join(', ')}`);
-  const found = traces(['/var/folders', ':var:folders', '/Users/', ':Users:', os.userInfo().username, ...machineTraces(layoutName)], buf);
-  if (found.length) throw new Error(`the disk image layout mentions this Mac (${found.length} item(s)); not packaging it`);
+  const paths = ['/var/folders', ':var:folders', '/Users/', ':Users:', os.userInfo().username].map((value) => ({ kind: 'local paths', value }));
+  const found = traces([...paths, ...machineTraces(layoutName)], buf);
+  if (found.length) throw new Error(`the disk image layout mentions this Mac (${[...new Set(found.map((t) => t.kind))].join(', ')}); not packaging it`);
 }
 
 /** Strings that would identify the Mac or account that built the image. */
@@ -536,14 +599,25 @@ function machineTraces(layoutName) {
   const dataVolume = /Volume UUID:\s+([0-9A-F-]{36})/.exec(run('/usr/sbin/diskutil', ['info', '/System/Volumes/Data'], { encoding: 'utf8' }))?.[1];
   const tmp = fs.realpathSync(os.tmpdir());
   const quiet = (cmd, argv) => spawnSync(cmd, argv, { encoding: 'utf8' }).stdout?.trim() || null;
-  const names = [quiet('/usr/sbin/scutil', ['--get', 'ComputerName']), quiet('/usr/sbin/scutil', ['--get', 'LocalHostName']), quiet('/usr/bin/id', ['-F'])];
-  return ['rw.dmg', 'fresh.dmg', 'imessage-agent-build', 'Macintosh HD', layoutName, os.homedir(), tmp, tmp.replace(/^\/private/, ''), dataVolume, dataVolume?.toLowerCase(), ...names]
-    .filter((s) => s && s.length >= 4);
+  // A Developer ID signature carries its certificate, which names the signer: that name is
+  // meant to be public, so it's only a trace when it isn't the identity this build signs with.
+  const fullName = quiet('/usr/bin/id', ['-F']);
+  const signer = fullName && identity?.includes(fullName);
+  const traces = {
+    'build file names': ['rw.dmg', 'fresh.dmg', 'imessage-agent-build', layoutName],
+    'the startup disk name': ['Macintosh HD'],
+    'the home folder': [os.homedir()],
+    'the temporary folder': [tmp, tmp.replace(/^\/private/, '')],
+    "the data volume's id": [dataVolume, dataVolume?.toLowerCase()],
+    'the computer name': [quiet('/usr/sbin/scutil', ['--get', 'ComputerName']), quiet('/usr/sbin/scutil', ['--get', 'LocalHostName'])],
+    "the account's full name": signer ? [] : [fullName],
+  };
+  return Object.entries(traces).flatMap(([kind, list]) => list.filter((s) => s && s.length >= 4).map((value) => ({ kind, value })));
 }
 
 /** Which of these strings appear in buf, as plain text or UTF-16 in either byte order, at any offset. */
 function traces(strings, buf) {
-  return strings.filter((s) => [Buffer.from(s, 'latin1'), Buffer.from(s, 'utf16le'), Buffer.from(s, 'utf16le').swap16()].some((b) => buf.includes(b)));
+  return strings.filter(({ value: s }) => [Buffer.from(s, 'latin1'), Buffer.from(s, 'utf16le'), Buffer.from(s, 'utf16le').swap16()].some((b) => buf.includes(b)));
 }
 
 /** Scans a raw image file (every block, used or free) for traces of this Mac. */
@@ -559,7 +633,7 @@ function assertImageIsClean(image, layoutName) {
       if (!n) break;
       const window = Buffer.concat([carry, chunk.subarray(0, n)]);
       const found = traces(strings, window);
-      if (found.length) throw new Error(`the disk image still holds ${found.length} trace(s) of this Mac; not packaging it`);
+      if (found.length) throw new Error(`the disk image still holds traces of this Mac (${[...new Set(found.map((t) => t.kind))].join(', ')}); not packaging it`);
       carry = Buffer.from(window.subarray(Math.max(0, window.length - overlap)));
     }
   } finally {

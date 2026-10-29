@@ -115,12 +115,25 @@ jobs:
         run: |
           git merge-base --is-ancestor "$GITHUB_SHA" origin/master
           test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      # A release can be built, notarized and signed on the maintainer's Mac and published by
+      # hand; this job then leaves it as it is rather than replacing it with an unnotarized build.
+      - name: Is this tag already released?
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::notice::$GITHUB_REF_NAME is already released; leaving it as it is."
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          fi
       # By ID, not name: `build`'s own upload, whatever else the run uploaded.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: steps.existing.outputs.released != 'true'
         with:
           artifact-ids: ${{ needs.build.outputs.artifact-id }}
           path: dist
       - name: The files match their checksums
+        if: steps.existing.outputs.released != 'true'
         run: |
           test "$(sha256sum dist/SHA256SUMS.txt | cut -d' ' -f1)" = "${{ needs.build.outputs.sums }}"
           cd dist && sha256sum --check SHA256SUMS.txt
@@ -128,6 +141,7 @@ jobs:
       # runner's own OpenSSL (nothing downloaded holds the key), then checked against the public
       # key the app ships with, so a release signed with the wrong key fails here.
       - name: Sign the checksums for the in-app updater
+        if: steps.existing.outputs.released != 'true'
         shell: bash # -eo pipefail
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
@@ -146,12 +160,13 @@ jobs:
       # Lets anyone check a download was built here from this tag: gh attestation verify <file> -R <repo>.
       # (GitHub only offers attestations for public repositories on most plans.)
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        if: github.event.repository.visibility == 'public'
+        if: steps.existing.outputs.released != 'true' && github.event.repository.visibility == 'public'
         with:
           subject-path: |
             dist/*.dmg
             dist/*.zip
       - name: Publish the release
+        if: steps.existing.outputs.released != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

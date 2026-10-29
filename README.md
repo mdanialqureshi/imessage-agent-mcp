@@ -66,8 +66,7 @@ You need **macOS 13 or newer** with Messages in iCloud, and **[Claude Code](http
    git clone https://github.com/mdanialqureshi/imessage-agent-mcp.git && cd imessage-agent-mcp
    npm ci && npm run build:app && open dist/Messages-Agent-*.dmg
    ```
-2. **Drag Messages Agent onto Applications** and open it.
-   <br>If you downloaded it, macOS says it can't verify the app (it isn't notarized by Apple). Click **Done**, then **System Settings → Privacy & Security → Open Anyway**.
+2. **Drag Messages Agent onto Applications** and open it. Downloads are signed with a Developer ID and notarized by Apple, so it opens like any other app.
 3. **Follow the guided setup.** It walks you through five steps:
    1. Pick what reads your messages: Claude Code or Codex.
    2. Install the background service.
@@ -157,7 +156,6 @@ The app's Settings cover the common ones. All of them live in `~/Library/Applica
 - Agents on your phone need your Mac on and awake, with Messages Agent open.
 - Attachments and images aren't read yet.
 - The model can be wrong. Dismiss wrong items, and they stay dismissed.
-- The app isn't notarized by Apple, so a downloaded copy needs **Open Anyway** once.
 
 ## Development
 
