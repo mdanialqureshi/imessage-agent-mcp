@@ -23,6 +23,28 @@ Messages Agent reads your new messages every couple of hours, works out what mat
   </picture>
 </p>
 
+## How it works
+
+```
+Messages ─► Reader ─► private copy ─► Service ─► Claude Code or Codex (your plan)
+                                         │        reads new conversations
+                                         ▼
+                                     item list ─► Dot, Claude, … (through their desktop app)
+```
+
+1. **The reader** copies Messages and Contacts into a private folder whenever the service needs a fresh copy. It's the only part with permission to read Messages.
+2. **The service** sends each new conversation, with a little earlier context, to Claude Code or Codex on your own plan. The model turns it into items: a plan, a task, a reply you owe, and so on. When a later message settles something, the item closes on its own.
+3. **Your agent** reads the list through the ChatGPT or Claude desktop app on your Mac, tells you what matters, and marks items done or scheduled.
+
+| What | When |
+|---|---|
+| New messages are read and the list updated | Every 2 hours while Messages Agent is open, and right away when your agent calls `refresh`. After your Mac sleeps, it catches up within 5 minutes. |
+| The first run | Reads the past 7 days |
+| A reply counts as owed | After 4 hours without your answer |
+| Your agent checks in | Whenever you ask, plus 9:00 and 18:00 (from the setup message) |
+
+You can change the timings in Settings. Searching messages or opening a conversation always uses a copy at most a minute old.
+
 ## Privacy
 
 Everything runs on your Mac. There's no account, no server of ours, and nothing listens on the network, not even on localhost. Two things leave your Mac, both through accounts you already have:
