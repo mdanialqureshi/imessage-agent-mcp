@@ -15,7 +15,7 @@ You need:
    ```sh
    node scripts/build-app.mjs --identity "Developer ID Application: <Name> (<TEAMID>)" --notarize <profile>
    ```
-   This signs everything with the hardened runtime and a secure timestamp, notarizes and staples the app, then the disk image, and writes `dist/Messages-Agent-<version>.dmg`, `.zip` and `SHA256SUMS.txt`.
+   It refuses to run with uncommitted changes or a commit that isn't on `origin/master`. It signs everything with the hardened runtime and a secure timestamp, notarizes and staples the app, then the disk image, and writes `dist/Messages-Agent-<version>.dmg`, `.zip` and `SHA256SUMS.txt`.
 3. Sign the checksums for the in-app updater, and check the signature against the key the app ships with:
    ```sh
    openssl pkeyutl -sign -rawin -inkey <key.pem> -in dist/SHA256SUMS.txt -out sig.bin
@@ -32,6 +32,8 @@ You need:
    ```
    The new tag runs `.github/workflows/release.yml`, which builds and tests the tagged source and checks what was published: the tag is on `master` and matches `package.json`, the files are exactly the listed ones and match their checksums, the signature verifies with the app's key, and the app is that version, signed with a Developer ID, notarized, and passes the app tests.
 
-Installed apps take an update only if it carries the release key's signature, and, when they were signed with a Developer ID themselves, only if it's signed by the same team and notarized.
+If the `check` job fails, delete the release (or mark it a pre-release) right away: installed apps look at the latest release, and they check it themselves, but nothing broken should stay there.
+
+Installed apps take an update only if it carries the release key's signature, and, when they were signed with a Developer ID themselves, only if Apple's certificate says it's the same team and it's notarized. So a release must always be signed by the same Apple team: a different one would stop every installed copy from updating.
 
 If the update key is ever exposed, generate a new pair, put the new public half in `src/update.ts` and ship that release by hand: apps with the old key won't accept updates signed with the new one.

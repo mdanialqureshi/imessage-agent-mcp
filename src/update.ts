@@ -110,8 +110,25 @@ const plistValue = (file: string, key: string) =>
   spawnSync('/usr/bin/plutil', ['-extract', key, 'raw', '-o', '-', file], { encoding: 'utf8' }).stdout?.trim() ?? '';
 const signature = (target: string) => spawnSync('/usr/bin/codesign', ['-dvvv', target], { encoding: 'utf8' }).stderr ?? '';
 const cdhash = (target: string) => /^CDHash=([0-9a-f]{40,64})$/m.exec(signature(target))?.[1] ?? null;
-/** The Apple team that signed it, or null for an ad-hoc signature. */
-const teamOf = (target: string) => /^TeamIdentifier=([0-9A-Z]{10})$/m.exec(signature(target))?.[1] ?? null;
+/** Signed with a Developer ID Application certificate Apple issued to this team. */
+export const developerId = (team: string) =>
+  `anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "${team}"`;
+const satisfies = (target: string, requirement: string, extra: string[] = []) =>
+  spawnSync('/usr/bin/codesign', ['--verify', '--strict', ...extra, '-R', `=${requirement}`, target]).status === 0;
+
+/**
+ * The Developer ID team this app was signed by, as Apple's certificate says (not just what the
+ * signature claims), or null for an ad-hoc build. Throws if it can't tell, rather than checking less.
+ */
+function runningTeam(): string | null {
+  if (!appBundle) return null;
+  const own = signature(appBundle);
+  if (!/^Identifier=/m.test(own)) throw new Error("this app can't read its own signature, so it can't check an update");
+  if (!/^Authority=Developer ID Application: /m.test(own)) return null;
+  const team = /^TeamIdentifier=([0-9A-Z]{10})$/m.exec(own)?.[1];
+  if (!team || !satisfies(appBundle, developerId(team))) throw new Error("this app's own Developer ID signature doesn't check out");
+  return team;
+}
 
 /**
  * Checks a zip's own listing before anything is unpacked: every entry inside the app's folder,
@@ -198,7 +215,7 @@ export function unpackedMatches(dir: string, listed: Map<string, boolean>): void
  * that Apple notarized, so a release built anywhere else can't replace it, even one carrying the
  * release key's signature.
  */
-export function verifyApp(app: string, version: string, team = appBundle ? teamOf(appBundle) : null): void {
+export function verifyApp(app: string, version: string, team = runningTeam()): void {
   const st = fs.lstatSync(app);
   if (!st.isDirectory()) throw new Error('the update has no app in it');
   if (spawnSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]).status !== 0) throw new Error("the update's signature doesn't verify");
@@ -212,8 +229,10 @@ export function verifyApp(app: string, version: string, team = appBundle ? teamO
     throw new Error("the update's reader isn't the expected one");
   }
   if (team) {
-    if (teamOf(app) !== team || teamOf(reader) !== team) throw new Error("the update isn't signed by the same developer as this app");
-    if (spawnSync('/usr/sbin/spctl', ['--assess', '--type', 'execute', app]).status !== 0) throw new Error("the update isn't notarized by Apple");
+    if (!/^[0-9A-Z]{10}$/.test(team)) throw new Error('not a team identifier');
+    if (!satisfies(reader, developerId(team)) || !satisfies(app, developerId(team), ['--deep'])) throw new Error("the update isn't signed by the same developer as this app");
+    // Notarization, from the ticket stapled to it (checked without the network).
+    if (!satisfies(app, `${developerId(team)} and notarized`, ['--deep', '--check-notarization'])) throw new Error("the update isn't notarized by Apple");
   }
 }
 

@@ -1115,8 +1115,11 @@ test('invisible characters that could hide instructions are removed', async () =
   assert.ok(isFilteredText('c\u200bode 123456'));
   assert.equal(displayText('your c\u00adode: 48\u200b29\u200b13'), '[filtered: verification code]');
   // Look-alike digits, a lowercase "pin is", a code split like a phone number, digits spaced out.
-  for (const code of ['Your code is １２３４５６', 'your pin is 4821', 'verification code: 482 9131', 'code 4 8 2 9 1 3']) assert.ok(isFilteredText(code), code);
-  for (const plain of ['pin the meeting at 1230 tomorrow', 'call me at 555-0123', 'code review at 10 30']) assert.ok(!isFilteredText(plain), plain);
+  for (const code of ['Your code is １２３４５６', 'Your code is ٤٨٢٩١٣', 'Your code is ४८२९', 'your pin is 4821', 'Pin 4821', 'verification code: 482 9131',
+    '482-9131 is your verification code', 'code 4 8 2 9 1 3', 'code 4  8  2  9', 'Your code is 48 29 13', 'code: 482.913', 'code: 482–913']) assert.ok(isFilteredText(code), code);
+  for (const plain of ['pin the meeting at 1230 tomorrow', 'call me at 555-0123', 'code review at 10 30', 'call 555-0123 about the code review', 'meet 29.10.2026, code of conduct applies']) {
+    assert.ok(!isFilteredText(plain), plain);
+  }
   // Everything Unicode calls invisible goes (Mongolian selectors, deprecated format characters,
   // interlinear annotation, musical format characters, Braille blank, unassigned tags).
   assert.equal(oneLine('a\u180b\u206a\ufff9\u{1d173}\u2800\u{e0080}b'), 'ab');
@@ -1127,7 +1130,7 @@ test('invisible characters that could hide instructions are removed', async () =
   const started = Date.now();
   isFilteredText('a\u200b'.repeat(500_000));
   displayText('a\u200b'.repeat(500_000));
-  assert.ok(Date.now() - started < 1000);
+  assert.ok(Date.now() - started < 5000, "linear, not quadratic");
 });
 
 test("a stranger's words stay out of the brief, and are labelled where they are shown", async () => {

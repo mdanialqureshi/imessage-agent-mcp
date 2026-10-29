@@ -20,8 +20,8 @@ const MAX_WINDOW_CHARS = 40_000;
 
 const VERIFICATION_CODE =
   /\b(codes?|passcode|password|verification|verify|OTP|one[- ]time|2FA|MFA|security|log[- ]?in|sign[- ]?in|authenticat\w*)\b/i;
-/** In capitals, or "pin" followed by "is", a colon or "code": "pin the meeting" is a verb. */
-const PIN = /\bPIN\b|\b[Pp]in(?=\s*(?:[:#]|is\b|code\b|number\b))/;
+/** In capitals, or "pin" followed by "is", a colon, "code" or the digits: "pin the meeting" is a verb. */
+const PIN = /\bPIN\b|\b[Pp]in(?=\s*(?:[:#]|is\b|code\b|number\b|\d{4,8}\b))/;
 /** The same words in other common languages (no \b: it only knows ASCII letters). */
 const VERIFICATION_CODE_INTL =
   /c[oó]digo|verificaci[oó]n|contraseña|senha|bestätigung|sicherheitscode|kennwort|mot de passe|vérification|codice|verifica|weryfikac|код|验证码|驗證碼|認証|確認コード|인증/i;
@@ -29,15 +29,26 @@ const VERIFICATION_CODE_INTL =
 const NEAR = 40;
 
 /**
- * Digits, maybe split by dashes or slashes ("48-29-13"), by spaces between groups of three or
- * more ("123 456", not a time like "10 30"), or spaced out one by one ("4 8 2 9").
+ * Digits, maybe split by dashes, dots or slashes ("48-29-13"), by spaces between groups of three
+ * or more ("123 456", not a time like "10 30"), in three or more pairs ("48 29 13"), or spaced out
+ * one by one ("4 8 2 9").
  */
-const DIGIT_RUNS = /(?<!\d)(?:\d\s){3,7}\d(?!\d)|\d+(?:[-/]\d+|\s\d{3,})*/g;
-/** Not codes: dates (2026-11-03, 11-14-2026, 11/14/2026) and local phone numbers (555-0123). */
-const NOT_A_CODE = /^(?:\d{4}([-/])\d{1,2}\1\d{1,2}|\d{1,2}([-/])\d{1,2}\2\d{4}|\d{3}[-\s]\d{4})$/;
-/** ...unless it comes right after the word ("your code is 482 9131"). */
+const DIGIT_RUNS = /(?<!\d)(?:\d\s+){3,7}\d(?!\d)|(?<!\d)(?:\d\d\s){2,3}\d\d(?!\d)|\d+(?:[-/.\u2010-\u2015]\d+|\s\d{3,})*/g;
+/** Not codes: dates (2026-11-03, 11-14-2026, 29.10.2026) and local phone numbers (555-0123). */
+const NOT_A_CODE = /^(?:\d{4}([-/.])\d{1,2}\1\d{1,2}|\d{1,2}([-/.])\d{1,2}\2\d{4}|\d{3}[-\s]\d{4})$/;
+/** ...unless the word is right before or after it ("your code is 482 9131", "482-9131 is your code"). */
 const PHONE_LIKE = /^\d{3}[-\s]\d{4}$/;
 const CODE_RIGHT_BEFORE = /\b(?:codes?|passcode|OTP|PIN|[Pp]in)\W{0,3}(?:is\W{0,3})?$/i;
+const CODE_RIGHT_AFTER = /^\W{0,3}is\s+(?:your\s+|the\s+)?(?:\w+\s+){0,2}(?:codes?|passcode|OTP|PIN)\b/i;
+/** Every script's digits as plain ones ("٤٨٢٩" is "4829"); NFKC covers full-width and the like. */
+const OTHER_DIGITS = /(?![0-9])\p{Nd}/gu;
+function plainDigit(d: string): string {
+  // Unicode puts each script's digits 0–9 in a row: count back to its zero.
+  let cp = d.codePointAt(0)!;
+  let value = 0;
+  while (value < 9 && /\p{Nd}/u.test(String.fromCodePoint(cp - 1)) && (cp - 1) % 16 !== 15) cp--, value++;
+  return String((d.codePointAt(0)! - cp) % 10);
+}
 
 /**
  * A code: 4–8 digits with a code word near them. Invisible characters are removed first, so they
@@ -45,12 +56,13 @@ const CODE_RIGHT_BEFORE = /\b(?:codes?|passcode|OTP|PIN|[Pp]in)\W{0,3}(?:is\W{0,
  */
 export function isFilteredText(raw: string): boolean {
   // Only the start of a message is ever shown (see displayText); this checks all of that and more.
-  // NFKC turns full-width and other look-alike digits into plain ones.
-  const text = visible(raw.slice(0, MAX_MESSAGE_CHARS * 4)).normalize('NFKC');
+  const text = visible(raw.slice(0, MAX_MESSAGE_CHARS * 4)).normalize('NFKC').replace(OTHER_DIGITS, plainDigit);
   for (const m of text.matchAll(DIGIT_RUNS)) {
     const digits = m[0].replace(/\D/g, '').length;
     if (digits < 4 || digits > 8) continue;
-    if (NOT_A_CODE.test(m[0]) && !(PHONE_LIKE.test(m[0]) && CODE_RIGHT_BEFORE.test(text.slice(Math.max(0, m.index - 24), m.index)))) continue;
+    const end = m.index + m[0].length;
+    const labelled = PHONE_LIKE.test(m[0]) && (CODE_RIGHT_BEFORE.test(text.slice(Math.max(0, m.index - 24), m.index)) || CODE_RIGHT_AFTER.test(text.slice(end, end + 40)));
+    if (NOT_A_CODE.test(m[0]) && !labelled) continue;
     const around = text.slice(Math.max(0, m.index - NEAR), m.index + m[0].length + NEAR);
     if (VERIFICATION_CODE.test(around) || PIN.test(around) || VERIFICATION_CODE_INTL.test(around)) return true;
   }
@@ -120,6 +132,7 @@ export class Conversations {
 
   /** For agents reading messages directly: a stranger's chat goes by its people, and says so. */
   agentLabel(chat: Chat): string {
+    if (this.contacts.size === 0) return `${this.peopleLabel(chat)} (⚠ Contacts unavailable: senders not checked)`;
     return this.fromStranger(chat) ? `${this.peopleLabel(chat)} (⚠ not in Contacts)` : this.chatLabel(chat);
   }
 

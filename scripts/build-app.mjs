@@ -61,6 +61,12 @@ const identity = opt('identity', null);
 const notaryProfile = opt('notarize', null);
 if (notaryProfile && !identity) throw new Error('--notarize needs --identity');
 const team = identity && /\(([A-Z0-9]{10})\)$/.exec(identity)?.[1];
+// A release is built from exactly a pushed commit on master: nothing uncommitted can slip in.
+if (identity) {
+  const git = (...a) => spawnSync('git', a, { cwd: root, encoding: 'utf8' });
+  if (git('status', '--porcelain').stdout !== '') throw new Error('commit or stash your changes before a signed build');
+  if (git('merge-base', '--is-ancestor', 'HEAD', 'origin/master').status !== 0) throw new Error('push this commit to master before a signed build');
+}
 if (identity && !team) throw new Error('--identity must be a full Developer ID name, ending in its team ID, like "Developer ID Application: Name (TEAMID)"');
 
 const run = (cmd, argv, opts = {}) => execFileSync(cmd, argv, { stdio: [opts.input === undefined ? 'ignore' : 'pipe', 'pipe', 'inherit'], ...opts });

@@ -162,13 +162,37 @@ enum Backend {
     return Output(status: p.terminationStatus, out: String(decoding: o, as: UTF8.self), err: String(decoding: e, as: UTF8.self))
   }
 
+  /// What a copy of this app must satisfy: this app's identifier and, when this app was signed with
+  /// a Developer ID, a certificate Apple issued to the same team. Nil if this app can't tell what
+  /// it was signed with, so nothing is installed rather than checked less.
+  static let installRequirement: String? = {
+    var me: SecCode?
+    var own: SecStaticCode?
+    var info: CFDictionary?
+    guard SecCodeCopySelf([], &me) == errSecSuccess, let me,
+          SecCodeCopyStaticCode(me, [], &own) == errSecSuccess, let own,
+          SecCodeCopySigningInformation(own, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+          let info = info as? [String: Any]
+    else { return nil }
+    let identifier = #"identifier "com.imessage-agent-mcp.app""#
+    guard let team = info[kSecCodeInfoTeamIdentifier as String] as? String else { return identifier } // Ad-hoc.
+    guard team.range(of: "^[0-9A-Z]{10}$", options: .regularExpression) != nil else { return nil }
+    let text = identifier + " and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists"
+      + " and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"\(team)\""
+    var requirement: SecRequirement?
+    guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess, let requirement,
+          SecStaticCodeCheckValidity(own, [], requirement) == errSecSuccess
+    else { return nil }
+    return text
+  }()
+
   /// The code hash of an intact copy of this app (every file sealed, every architecture and
-  /// nested program checked, this app's identifier), or nil.
+  /// nested program checked, installRequirement), or nil.
   static func verifiedCdHash(_ url: URL) -> String? {
     var code: SecStaticCode?
-    guard SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess, let code else { return nil }
+    guard let text = installRequirement, SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess, let code else { return nil }
     var requirement: SecRequirement?
-    guard SecRequirementCreateWithString(#"identifier "com.imessage-agent-mcp.app""# as CFString, [], &requirement) == errSecSuccess else { return nil }
+    guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess else { return nil }
     let flags = SecCSFlags(rawValue: UInt32(kSecCSStrictValidate) | UInt32(kSecCSCheckAllArchitectures) | UInt32(kSecCSCheckNestedCode))
     guard SecStaticCodeCheckValidity(code, flags, requirement) == errSecSuccess else { return nil }
     var info: CFDictionary?

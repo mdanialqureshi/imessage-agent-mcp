@@ -98,11 +98,13 @@ jobs:
           shasum -a 256 -c SHA256SUMS.txt
       - name: The checksums carry the release key's signature (the one built into the app)
         working-directory: published
+        # The system's LibreSSL can't verify Ed25519; Homebrew's OpenSSL 3 on the runner can.
         run: |
+          openssl="$(brew --prefix openssl@3)/bin/openssl"
           grep -o "UPDATE_PUBLIC_KEY = '[^']*'" ../src/update.ts | cut -d"'" -f2 | base64 -d > "$RUNNER_TEMP/pub.der"
           test -s "$RUNNER_TEMP/pub.der"
           base64 -d -i SHA256SUMS.txt.sig > "$RUNNER_TEMP/sig.bin"
-          openssl pkeyutl -verify -pubin -keyform DER -inkey "$RUNNER_TEMP/pub.der" -rawin -in SHA256SUMS.txt -sigfile "$RUNNER_TEMP/sig.bin"
+          "$openssl" pkeyutl -verify -pubin -keyform DER -inkey "$RUNNER_TEMP/pub.der" -rawin -in SHA256SUMS.txt -sigfile "$RUNNER_TEMP/sig.bin"
       - name: The app is this version, signed with a Developer ID and notarized
         working-directory: published
         run: |
@@ -111,10 +113,13 @@ jobs:
           bundle="app/Messages Agent.app"
           test "$(plutil -extract CFBundleShortVersionString raw -o - "$bundle/Contents/Info.plist")" = "$version"
           codesign --verify --deep --strict "$bundle"
-          for target in "$bundle" "$bundle/Contents/Helpers/Messages Agent Reader.app"; do
-            codesign -dvv "$target" 2>&1 | grep -q '^Authority=Developer ID Application: '
-            codesign -dvv "$target" 2>&1 | grep -Eq '^TeamIdentifier=[0-9A-Z]{10}$'
-          done
+          # A Developer ID certificate Apple issued (not just what the signature claims), the same
+          # team for the app and its reader, and notarization from the stapled ticket.
+          team=$(codesign -dvv "$bundle" 2>&1 | sed -n 's/^TeamIdentifier=\([0-9A-Z]\{10\}\)$/\1/p')
+          test -n "$team"
+          req="anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"$team\""
+          codesign --verify --strict -R "=$req" "$bundle/Contents/Helpers/Messages Agent Reader.app"
+          codesign --verify --deep --strict --check-notarization -R "=$req and notarized" "$bundle"
           xcrun stapler validate "$bundle"
           xcrun stapler validate Messages-Agent-*.dmg
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
